@@ -290,18 +290,30 @@ int main(int argc, char *argv[])
 		psrc = history_period[0];
 		p = 0;
 		for(j=0; j < state_count; j++) {
-			p = (transitions[(src*state_count*state_count)+(psrc*state_count)+j] / 
-			counts[(src*state_count)+psrc]) + p;
+			if(counts[(src*state_count)+psrc] > 0.0) {
+				p = (transitions[(src*state_count*state_count)+(psrc*state_count)+j] / 
+					counts[(src*state_count)+psrc]) + p;
+			}
 			if(r <= p) {
 				dest = j;
 				break;
 			}
 		}
-		// sanity check
+		/*
+		 * we could generate a state we have never actually seen
+		 *
+		 * choose zero state in this case
+		 */
+	
 		if(dest == -1) {
-			fprintf(stderr,
-			"error: i: %d, src: %d, dest -1\n",i,src);
-			exit(1);
+			if(counts[(src*state_count)+psrc] == 0.0) {
+				dest = 0-(int)min;
+			} else {
+				fprintf(stderr,
+				"error: i: %d, src: %d, psrc: %d dest -1\n",i,src,psrc);
+				fprintf(stderr,"counts: %f\n",counts[(src*state_count)+psrc]);
+				exit(1);
+			}
 		}
 		printf("%10.0f %d\n",now,dest+(int)min);
 		for(j=0; j < (Period-1); j++) {
