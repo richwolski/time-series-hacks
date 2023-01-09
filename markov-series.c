@@ -20,14 +20,17 @@
 char *Usage = "markov-series -f filename\n\
 \t-c sample_count\n\
 \t-i time interval (for synthetic trace)\n\
+\t-3 epochs\n\
 \t-V <verbose mode>\n";
 
-#define ARGS "f:Vc:i:"
+#define ARGS "f:Vc:i:3:"
 
 char Fname[255];
 int Verbose;
 int Sample_count;
 double Interval;
+int Use3D;
+int Epochs;
 
 
 int main(int argc, char *argv[])
@@ -55,9 +58,16 @@ int main(int argc, char *argv[])
 	double p;
 	double prev_p;
 	double start_ts;
+	double **ttables;
+	double **tcounts;
+	int theepoch;
+	int lastepoch;
+	int e;
+	
 
 	memset(Fname,0,sizeof(Fname));
 	Interval = 1;
+	Use3D = 0;
 	while((c = getopt(argc,argv,ARGS)) != EOF)
 	{
 		switch(c)
@@ -74,6 +84,10 @@ int main(int argc, char *argv[])
 			case 'i':
 				Interval = atof(optarg);
 				break;
+			case '3':
+				Use3D = 1;
+				Epochs = atoi(optarg);
+				break;
 			default:
 				fprintf(stderr,
 			"unrecognized command %c\n",(char)c);
@@ -88,6 +102,13 @@ int main(int argc, char *argv[])
 		fprintf(stderr,"usage: %s",Usage);
 		exit(1);
 	}
+
+	if((Use3D == 1) && (Epochs == 0)) {
+		fprintf(stderr,"for 3D method, must specify epochs\n");
+		fprintf(stderr,"usage: %s",Usage);
+		exit(1);
+	}
+		
 
 	field_count = GetFieldCount(Fname);
 
@@ -166,20 +187,57 @@ int main(int argc, char *argv[])
 	 */
 	state_count = (int)(max - min) + 1;
 
-	transitions = (double *)malloc(state_count*state_count*sizeof(double));
-	if(transitions == NULL) {
-		exit(1);
+	if(Use3D == 1) {
+		ttables = (double **)malloc(Epochs * sizeof(double *));
+		tcounts = (double **)malloc(Epochs * sizeof(double *));
+		if(ttables == NULL) {
+			exit(1);
+		}
+		if(tcounts == NULL) {
+			exit(1);
+		}
+		for(i=0; i < Epochs; i++) {
+			ttables[i] = (double *)malloc(state_count*state_count*sizeof(double));
+			if(ttables[i] == NULL) {
+				fprintf(stderr,
+					"couldn't get space for ttables %d\n",i);
+				exit(1);
+			}
+			tcounts[i] = (double *)malloc(state_count*sizeof(double));
+			if(tcounts[i] == NULL) {
+				fprintf(stderr,
+					"couldn't get space for tcounts %d\n",i);
+				exit(1);
+			}
+			memset(ttables[i],0,state_count*state_count*sizeof(double));
+			memset(tcounts[i],0,state_count*sizeof(double));
+		}
+	} else {
+		ttables = (double **)malloc(sizeof(double *));
+		if(ttables == NULL) {
+			exit(1);
+		}
+		tcounts = (double **)malloc(sizeof(double *));
+		if(tcounts == NULL) {
+			exit(1);
+		}
+	
+		ttables[0] = (double *)malloc(state_count*state_count*sizeof(double));
+		if(ttables[0] == NULL) {
+			exit(1);
+		}
+		memset(ttables[0],0,state_count*state_count*sizeof(double));
+		tcounts[0] = (double *)malloc(state_count*sizeof(double));
+		memset(tcounts[0],0,state_count*sizeof(double));
 	}
-	memset(transitions,0,state_count*state_count*sizeof(double));
-
-	counts = (double *)malloc(state_count*sizeof(double));
-	memset(counts,0,state_count*sizeof(double));
+	
 
 	Rewind(input_data);
 	/*
 	 * compute the transition counts and the count of each state
 	 * as a src
 	 */
+	theepoch = 0;
 	src = -10000000;
 	while(ReadData(input_data,field_count,values) != 0) {
 		if(src == -10000000) {
@@ -187,31 +245,46 @@ int main(int argc, char *argv[])
 			continue;
 		}
 		dest = (int)(values[field_count-1]-min);
+		transitions = ttables[theepoch];
 		transitions[src*state_count+dest] += 1.0;
+		counts = tcounts[theepoch];
 		counts[src] += 1.0;
 		src = dest;
+		if(Use3D == 1) {
+			theepoch = (theepoch + 1) % Epochs;
+		}
 	}
 
 	if(Verbose == 1) {
+		if(Use3D == 1) {
+			lastepoch = Epochs;
+		} else {
+			lastepoch = 1;
+		}
 		count = SizeOf(input_data);
-		printf("       ");
-		for(i=0; i < state_count; i++) {
-			printf("%6.6d ",i+(int)min);
-		}
-		printf("\n");
-		for(i=0; i < state_count; i++) {
-			printf("--------");
-		}
-		printf("\n");
-		for(i=0; i < state_count; i++) {
-			printf("%4.4d | ",i+(int)min);
-			for(j=0; j < state_count; j++) {
-				printf("%4.4f ",transitions[i*state_count+j]/counts[i]);
-	//			printf("%4.4f ",transitions[i*state_count+j]);
-	//			printf("%4.4f ",transitions[i*state_count+j]/(double)count);
+		for(e = 0; i < lastepoch; e++) {
+			printf("       ");
+			for(i=0; i < state_count; i++) {
+				printf("%6.6d ",i+(int)min);
 			}
 			printf("\n");
+			for(i=0; i < state_count; i++) {
+				printf("--------");
+			}
+			printf("\n");
+			transitions = ttables[e];
+			counts = tcounts[e];
+			for(i=0; i < state_count; i++) {
+				printf("%4.4d | ",i+(int)min);
+				for(j=0; j < state_count; j++) {
+					printf("%4.4f ",transitions[i*state_count+j]/counts[i]);
+		//			printf("%4.4f ",transitions[i*state_count+j]);
+		//			printf("%4.4f ",transitions[i*state_count+j]/(double)count);
+				}
+				printf("\n");
+			}
 		}
+		exit(0);
 	}
 
 	if(Sample_count == 0) {
@@ -221,6 +294,7 @@ int main(int argc, char *argv[])
 	 * generate a synthetic series using the conditional transition
 	 * probabilities
 	 */
+	theepoch = 0;
 	src=0;
 	now = start_ts;
 	for(i=0; i < Sample_count; i++) {
@@ -230,6 +304,8 @@ int main(int argc, char *argv[])
 		 */
 		dest = -1;
 		p = 0;
+		transitions = ttables[theepoch];
+		counts = tcounts[theepoch];
 		for(j=0; j < state_count; j++) {
 			prev_p = p;
 			p = (transitions[src*state_count+j] / counts[src]) + p;
@@ -237,24 +313,6 @@ int main(int argc, char *argv[])
 				dest = j;
 				break;
 			}
-/*
-			if(j != 0) {
-				prev_p = transitions[src*state_count+(j-1)] / counts[src];
-			}
-			if((j == 0) && (r <= p)) {
-				dest = j;
-				break;
-			}
-*/
-/*
-			} else if((j != 0) && (r > prev_p) && (r <= p)) {
-				dest = j;
-				break;
-			} else if((j == (state_count-1)) && (r > p)) {
-				dest = j;
-				break;
-			}
-*/
 		}
 		// sanity check
 		if(dest == -1) {
@@ -265,13 +323,27 @@ int main(int argc, char *argv[])
 		printf("%10.0f %d\n",now,dest+(int)min);
 		src=dest;
 		now += Interval;
+		if(Use3D == 1) {
+			theepoch = (theepoch + 1) % Epochs;
+		}
 	}
 
 		
 	FreeDataSet(input_data);
 	RBDeleteTree(states);
 	free(values);
-	free(transitions);
+	if(Use3D == 1) {
+		for(i=0; i < Epochs; i++) {
+			free(ttables[i]);
+			free(tcounts[i]);
+		}
+	} else {
+		free(ttables[0]);
+		free(tcounts[0]);
+	}
+	free(ttables);
+	free(tcounts);
+		
 	return(0);
 }
 

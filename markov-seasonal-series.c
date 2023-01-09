@@ -21,15 +21,17 @@ char *Usage = "markov-seasonal-series -f filename\n\
 \t-c sample_count\n\
 \t-i time interval (for synthetic trace)\n\
 \t-P cyclic_period (measured in lags)\n\
+\t-3 <use 3D method>\n\
 \t-V <verbose mode>\n";
 
-#define ARGS "f:Vc:i:P:"
+#define ARGS "f:Vc:i:P:3"
 
 char Fname[255];
 int Verbose;
 int Sample_count;
 double Interval;
 int Period;
+int Use3D;
 
 
 int main(int argc, char *argv[])
@@ -59,10 +61,16 @@ int main(int argc, char *argv[])
 	double r;
 	double p;
 	double start_ts;
+	double **ttables;
+	double **tcounts;
+	int tp;
+	int theperiod;
+	int lastperiod;
 
 	memset(Fname,0,sizeof(Fname));
 	Interval = 1;
 	Period = 0;
+	Use3D = 0;
 	while((c = getopt(argc,argv,ARGS)) != EOF)
 	{
 		switch(c)
@@ -81,6 +89,9 @@ int main(int argc, char *argv[])
 				break;
 			case 'P':
 				Period = atoi(optarg);
+				break;
+			case '3':
+				Use3D = 1;
 				break;
 			default:
 				fprintf(stderr,
@@ -175,28 +186,62 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	if(Use3D == 1) {
+		ttables = (double **)malloc(Period * sizeof(double *));
+		tcounts = (double **)malloc(Period * sizeof(double *));
+	} else {
+		ttables = (double **)malloc(sizeof(double *));
+		tcounts = (double **)malloc(sizeof(double *));
+	}
+
+	if(ttables == NULL) {
+		exit(1);
+	}
+
+	if(tcounts == NULL) {
+		exit(1);
+	}
+
 
 	/*
 	 * cover all possible states
 	 */
 	state_count = (int)(max - min) + 1;
 
-	/*
-	 * condition each transition on previous value and period
-	 * value
-	 */
-	transitions = (double *)
-		malloc(state_count*state_count*state_count*sizeof(double));
-	if(transitions == NULL) {
-		exit(1);
-	}
-	memset(transitions,0,state_count*state_count*state_count*sizeof(double));
+	if(Use3D == 1) {
+		for(i=0; i < Period; i++) {
+			ttables[i] = (double *)malloc(state_count*state_count*state_count*sizeof(double));
+			if(ttables[i] == NULL) {
+				fprintf(stderr,"no space for ttable %d\n",i);
+				exit(1);
+			}
+			memset(ttables[i],0,state_count*state_count*state_count*sizeof(double));
+			tcounts[i] = (double *)malloc(state_count*state_count*sizeof(double));
+			if(tcounts[i] == NULL) {
+				fprintf(stderr,"no space for tcount %d\n",i);
+				exit(1);
+			}
+			memset(tcounts[i],0,state_count*state_count*sizeof(double));
+		}
+	} else {
 
-	counts = (double *)malloc(state_count*state_count*sizeof(double));
-	if(counts == 0) {
-		exit(1);
+		/*
+		 * condition each transition on previous value and period
+		 * value
+		 */
+		ttables[0] = (double *)
+			malloc(state_count*state_count*state_count*sizeof(double));
+		if(ttables[0] == NULL) {
+			exit(1);
+		}
+		memset(ttables[0],0,state_count*state_count*state_count*sizeof(double));
+
+		tcounts[0] = (double *)malloc(state_count*state_count*sizeof(double));
+		if(tcounts[0] == 0) {
+			exit(1);
+		}
+		memset(tcounts[0],0,state_count*state_count*sizeof(double));
 	}
-	memset(counts,0,state_count*state_count*sizeof(double));
 
 	history_period = (double *)malloc(Period * sizeof(double));
 	if(history_period == NULL) {
@@ -213,6 +258,7 @@ int main(int argc, char *argv[])
 	 * as a src
 	 */
 	src = -10000000;
+	theperiod = 0;
 	while(ReadData(input_data,field_count,values) != 0) {
 		psrc = history_period[0]; // get oldest period value
 		if(src == -10000000) {
@@ -221,7 +267,9 @@ int main(int argc, char *argv[])
 			continue;
 		}
 		dest = (int)(values[field_count-1]-min);
+		transitions = ttables[theperiod];
 		transitions[(src*state_count*state_count)+(psrc*state_count)+dest] += 1.0;
+		counts = tcounts[theperiod];
 		counts[(src*state_count)+psrc] += 1.0;
 		/*
 		 * add src to history period
@@ -231,35 +279,48 @@ int main(int argc, char *argv[])
 		}
 		history_period[Period - 1] = dest;
 		src = dest;
+		if(Use3D == 1) {
+			theperiod = (theperiod + 1) % Period;
+		}
 	}
 
 	if(Verbose) {
-		printf("               ");
-		for(i=0; i < state_count; i++) {
-			printf("%7.7d ",i+(int)min);
+		if(Use3D == 0) {
+			lastperiod = 1;
+		} else {
+			lastperiod = Period;
 		}
-		printf("\n");
-		for(i=0; i < state_count; i++) {
-			for(j=0; j < state_count; j++) {
-				printf("[%5.5d %5.5d]: ",i+(int)min,j+(int)min);
-				for(k=0; k < state_count; k++) {
-					if(counts[state_count*i+j] == 0) {
-						printf("%5.5f ",0.0);
-					} else {
-						p =
-						transitions[(state_count*state_count*i)+
-							    (state_count*j)+
-							    k] / counts[state_count*i+j];
-						printf("%5.5f ",p);
-						if(p > 1.0) {
-							printf("%f %f\n",
-								transitions[(state_count*i)+ (state_count*j)+ k],
-								counts[state_count*i+j]);
-							exit(1);
+
+		for(tp=0; tp < lastperiod; tp++) {
+			transitions = ttables[tp];
+			counts = tcounts[tp];
+			printf("               ");
+			for(i=0; i < state_count; i++) {
+				printf("%7.7d ",i+(int)min);
+			}
+			printf("\n");
+			for(i=0; i < state_count; i++) {
+				for(j=0; j < state_count; j++) {
+					printf("[%5.5d %5.5d]: ",i+(int)min,j+(int)min);
+					for(k=0; k < state_count; k++) {
+						if(counts[state_count*i+j] == 0) {
+							printf("%5.5f ",0.0);
+						} else {
+							p =
+							transitions[(state_count*state_count*i)+
+								    (state_count*j)+
+								    k] / counts[state_count*i+j];
+							printf("%5.5f ",p);
+							if(p > 1.0) {
+								printf("%f %f\n",
+									transitions[(state_count*i)+ (state_count*j)+ k],
+									counts[state_count*i+j]);
+								exit(1);
+							}
 						}
 					}
+					printf("\n");
 				}
-				printf("\n");
 			}
 		}
 		exit(1);
@@ -289,6 +350,8 @@ int main(int argc, char *argv[])
 		dest = -1;
 		psrc = history_period[0];
 		p = 0;
+		counts = tcounts[theperiod];
+		transitions = ttables[theperiod];
 		for(j=0; j < state_count; j++) {
 			if(counts[(src*state_count)+psrc] > 0.0) {
 				p = (transitions[(src*state_count*state_count)+(psrc*state_count)+j] / 
@@ -322,14 +385,27 @@ int main(int argc, char *argv[])
 		history_period[Period-1] = dest;
 		src=dest;
 		now += Interval;
+		if(Use3D == 1) {
+			theperiod = (theperiod + 1) % Period;
+		}
+	}
+
+	if(Use3D == 1) {
+		for(i=0; i < Period; i++) {
+			free(ttables[i]);
+			free(tcounts[i]);
+		}
+	} else {
+		free(ttables[0]);
+		free(tcounts[0]);
 	}
 
 		
 	FreeDataSet(input_data);
 	RBDeleteTree(states);
 	free(values);
-	free(transitions);
-	free(history_period);
+	free(ttables);
+	free(tcounts);
 	return(0);
 }
 
