@@ -339,6 +339,7 @@ int main(int argc, char *argv[])
 	/*
 	 * start with zero state
  	 */
+	theperiod = 0;
 	src=0-min;
 	memset(history_period,0-min,Period*sizeof(double));
 	now = start_ts;
