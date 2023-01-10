@@ -20,11 +20,12 @@
 char *Usage = "markov-seasonal-series -f filename\n\
 \t-c sample_count\n\
 \t-i time interval (for synthetic trace)\n\
+\t-I number-of-evdnts-to-add\n\
 \t-P cyclic_period (measured in lags)\n\
 \t-3 <use 3D method>\n\
 \t-V <verbose mode>\n";
 
-#define ARGS "f:Vc:i:P:3"
+#define ARGS "f:Vc:i:P:3I:"
 
 char Fname[255];
 int Verbose;
@@ -32,8 +33,131 @@ int Sample_count;
 double Interval;
 int Period;
 int Use3D;
+int DoIncrement;
 
+/*
+ * this function adds arrivals to the epoch according to the conditional
+ * probabilities for the epoch
+ *
+ * it returns the total number of arrivals it added to the epoch
+ */
+int IncrementEpoch(int epoch, double **tcounts, double**ttables, int scount)
+{
+	double *trans;
+	double *counts;
+	int i;
+	int j;
+	int k;
+	double p;
+	double q;
+	double r;
+	double psum;
+	double *cps; /* probabilities of each conditional pair */
+	double cptot;
+	int incr;
 
+	trans = ttables[epoch]; /* transition counts of next state based on pair */
+	counts = tcounts[epoch]; /* count of each conditional pair */
+
+	cps = (double *)malloc(scount*scount*sizeof(double));
+	if(cps == NULL) {
+		exit(1);
+	}
+	/*
+	 * count up total number of conditional pairs
+	 */
+	cptot = 0.0;
+	for(i=0; i < scount; i++) {
+		for(j=0; j < scount; j++) {
+			cptot += counts[i*scount+j];
+		}
+	}
+	/*
+	 * sanity check
+	 */
+	if(cptot == 0.0) {
+		free(cps);
+		return(-1);
+	}
+
+	/*
+	 * compute probs of each pair
+	 */
+	for(i=0; i < scount; i++) {
+		for(j=0; j < scount; j++) {
+			cps[i*scount+j] = counts[i*scount+j]/cptot;
+		}
+	}
+
+	/*
+	 * now for the tricky part
+	 *
+	 * choose a pair and a count based on the joint prob of a pair and the
+	 * count in the transition array
+	 * skip the zeros since this is an increment function
+	 */
+	psum = 0.0;
+	r = drand48();
+	for(i=0; i < scount; i++) {
+		for(j=0; j < scount; j++) {
+			/*
+			 * skip case where we haven't seen a pair
+			 */
+			if(counts[i*scount+j] == 0) {
+				continue;
+			}
+			/*
+			 * skip the case where all of the condition prob is
+			 * concentrated at zero
+			 */
+			p = trans[i*scount*scount+j*scount+0] / counts[i*scount+j];
+			if(p == 1.0) {
+				continue;
+			}
+			for(k=0; k < scount; k++) {
+				if(k == 0) {
+					q = 1-(trans[i*scount*scount+j*scount+k]/counts[i*scount+j]);
+				} else {
+					/* condition on dest not zero */
+					p = trans[i*scount*scount+j*scount+k] / counts[i*scount+j];
+//printf("(%d,%d) -- %d p: %f q: %f cps: %f counts: %d t: %d\n",
+//i,j,k,p,q,cps[i*scount+j],(int)counts[i*scount+j],(int)trans[i*scount*scount+j*scount+0]);
+					psum += (cps[i*scount+j]*(p / q));
+//printf("psum: %f\n",psum);
+					if(r <= psum) {
+						/*
+						 * found it
+						 */
+						incr = k;
+						trans[i*scount*scount+j*scount+k] += 1;
+						counts[i*scount+j] += 1;
+						if(Verbose == 1) {
+  	printf("incr (%d,%d) -- %d p: %f q: %f psum: %f r: %f\n",
+							i,j,k,
+							p,q,psum,r);
+						}
+						free(cps);
+						return(incr);
+					}
+				}
+			}
+		}
+	}
+
+	printf("error: couldn't increment epoch %d\n",epoch);
+	for(i=0; i < scount; i++) {
+		for(j=0; j < scount; j++) {
+			printf("(%d,%d) count: %d prob: %f\n",
+				i,j,(int)counts[i*scount+j],cps[i*scount+j]);
+		}
+		printf("r: %f, q: %f, psum: %f\n",r,q,psum);
+	}
+exit(1);
+
+	free(cps);
+	return(-1);
+}
+						
 int main(int argc, char *argv[])
 {
 	int c;
@@ -66,11 +190,13 @@ int main(int argc, char *argv[])
 	int tp;
 	int theperiod;
 	int lastperiod;
+	int incr;
 
 	memset(Fname,0,sizeof(Fname));
 	Interval = 1;
 	Period = 0;
 	Use3D = 0;
+	DoIncrement = 0;
 	while((c = getopt(argc,argv,ARGS)) != EOF)
 	{
 		switch(c)
@@ -86,6 +212,9 @@ int main(int argc, char *argv[])
 				break;
 			case 'i':
 				Interval = atof(optarg);
+				break;
+			case 'I':
+				DoIncrement = atoi(optarg);
 				break;
 			case 'P':
 				Period = atoi(optarg);
@@ -284,6 +413,7 @@ int main(int argc, char *argv[])
 		}
 	}
 
+#if 0
 	if(Verbose) {
 		if(Use3D == 0) {
 			lastperiod = 1;
@@ -325,11 +455,29 @@ int main(int argc, char *argv[])
 		}
 		exit(1);
 	}
+#endif
+
+	/*
+	 * if we are incrementing, do it here
+	 */
+	if(DoIncrement > 0) {
+		for(i=0; i < DoIncrement; i++) {
+			incr = IncrementEpoch(0,tcounts,ttables,state_count);
+			if(incr < 0) {
+				printf("increment failed\n");
+				exit(1);
+			}
+		}
+		if(Verbose == 1) {
+			exit(0);
+		}
+	}
 				
 
 	if(Sample_count == 0) {
 		Sample_count = SizeOf(input_data);
 	}
+
 	/*
 	 * generate a synthetic series using the conditional transition
 	 * probabilities
