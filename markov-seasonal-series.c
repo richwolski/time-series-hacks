@@ -5,7 +5,7 @@
 #include <math.h>
 
 #include "simple_input.h"
-#include "red_black.h"
+#include "redblack.h"
 
 /*
  * for WTB interarrival times where cameras take sequences
@@ -187,7 +187,7 @@ int *BusyEpochs(int ecount, int epochs, double **tcounts, double **ttables, int 
 		exit(1);
 	}
 
-	list = RBTreeInit();
+	list = RBInitD();
 	if(list == NULL) {
 		exit(1);
 	}
@@ -211,7 +211,7 @@ int *BusyEpochs(int ecount, int epochs, double **tcounts, double **ttables, int 
 		if(cptot == 0.0) {
 			free(cps);
 			free(busy_epochs);
-			RBDeleteTree(list);
+			RBDestroyD(list);
 			return(NULL);
 		}
 
@@ -242,7 +242,7 @@ int *BusyEpochs(int ecount, int epochs, double **tcounts, double **ttables, int 
 		}
 		q = 1 - p; /* prob of non zero */
 		hv.i = e;
-		RBInsert(list,q,hv);
+		RBInsertD(list,q,hv);
 	}
 
 	/*
@@ -252,12 +252,12 @@ int *BusyEpochs(int ecount, int epochs, double **tcounts, double **ttables, int 
 	RB_BACKWARD(list,rb) {
 		busy_epochs[e] = rb->value.i;
 		e++;
-		if(e >= epochs) {
+		if(e >= ecount) {
 			break;
 		}
 	}
 
-//	RBDeleteTree(list);
+	RBDestroyD(list);
 	free(cps);
 
 	return(busy_epochs);
@@ -395,7 +395,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	states = RBTreeInit();
+	states = RBInitD();
 	if(states == NULL) {
 		exit(1);
 	}
@@ -415,11 +415,11 @@ int main(int argc, char *argv[])
 		/*
 		 * assume value is in last field
 		 */
-		rb = RBFind(states,values[field_count-1]);
+		rb = RBFindD(states,values[field_count-1]);
 		if(rb != NULL) {
 			count = rb->value.d + 1.0; 
 			hv.d = count;
-			RBInsert(states,values[field_count-1],hv);
+			RBInsertD(states,values[field_count-1],hv);
 		} else {
 			if(values[field_count-1] > max) {
 				max = values[field_count-1];
@@ -429,7 +429,7 @@ int main(int argc, char *argv[])
 			}
 	
 			hv.d = 1.0;
-			RBInsert(states,values[field_count-1],hv);
+			RBInsertD(states,values[field_count-1],hv);
 		}
 	}
 
@@ -694,7 +694,7 @@ int main(int argc, char *argv[])
 
 		
 	FreeDataSet(input_data);
-	RBDeleteTree(states);
+	RBDestroyD(states);
 	free(values);
 	free(ttables);
 	free(tcounts);
