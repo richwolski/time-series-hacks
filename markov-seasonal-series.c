@@ -42,11 +42,15 @@ int BusyCount;
  * probabilities for the epoch
  *
  * it returns the total number of arrivals it added to the epoch
+ * assumes that otcounts and ottables are initialized as out parameters
  */
-int IncrementEpoch(int epoch, double **tcounts, double **ttables, int scount)
+int IncrementEpoch(int epoch, double **tcounts, double **ttables, int scount,
+                   double **otcounts, double **ottables)
 {
 	double *trans;
 	double *counts;
+	double *ocounts;
+	double *otrans;
 	int i;
 	int j;
 	int k;
@@ -57,9 +61,13 @@ int IncrementEpoch(int epoch, double **tcounts, double **ttables, int scount)
 	double *cps; /* probabilities of each conditional pair */
 	double cptot;
 	int incr;
+	double scheck;
+	double m;
 
 	trans = ttables[epoch]; /* transition counts of next state based on pair */
 	counts = tcounts[epoch]; /* count of each conditional pair */
+	otrans = ottables[epoch]; /* output version */
+	ocounts = otcounts[epoch]; /* output version */
 
 	cps = (double *)malloc(scount*scount*sizeof(double));
 	if(cps == NULL) {
@@ -71,6 +79,14 @@ int IncrementEpoch(int epoch, double **tcounts, double **ttables, int scount)
 	cptot = 0.0;
 	for(i=0; i < scount; i++) {
 		for(j=0; j < scount; j++) {
+			/*
+			 * skip cases where all probability is concentrated at
+			 * zero
+			 */
+			p = trans[i*scount*scount+j*scount+0] / counts[i*scount+j];
+			if(p == 1.0) {
+				continue;
+			}
 			cptot += counts[i*scount+j];
 		}
 	}
@@ -87,9 +103,15 @@ int IncrementEpoch(int epoch, double **tcounts, double **ttables, int scount)
 	 */
 	for(i=0; i < scount; i++) {
 		for(j=0; j < scount; j++) {
+			cps[i*scount+j] = 0.0;
+			p = trans[i*scount*scount+j*scount+0] / counts[i*scount+j];
+			if(p == 1.0) {
+				continue;
+			}
 			cps[i*scount+j] = counts[i*scount+j]/cptot;
 		}
 	}
+
 
 	/*
 	 * now for the tricky part
@@ -106,6 +128,7 @@ int IncrementEpoch(int epoch, double **tcounts, double **ttables, int scount)
 			 * skip case where we haven't seen a pair
 			 */
 			if(counts[i*scount+j] == 0) {
+//printf("no counts (%d,%d)\n",i,j);
 				continue;
 			}
 			/*
@@ -114,25 +137,38 @@ int IncrementEpoch(int epoch, double **tcounts, double **ttables, int scount)
 			 */
 			p = trans[i*scount*scount+j*scount+0] / counts[i*scount+j];
 			if(p == 1.0) {
+//printf("all zero\n");
 				continue;
 			}
+			scheck = 0.0;
 			for(k=0; k < scount; k++) {
 				if(k == 0) {
 					q = 1-(trans[i*scount*scount+j*scount+k]/counts[i*scount+j]);
+					if(q == 0) {
+						q = 0.000001;
+					}
 				} else {
 					/* condition on dest not zero */
 					p = trans[i*scount*scount+j*scount+k] / counts[i*scount+j];
+					m = (cps[i*scount+j]*(p / q));
+//if(m > 0) {
 //printf("(%d,%d) -- %d p: %f q: %f cps: %f counts: %d t: %d\n",
-//i,j,k,p,q,cps[i*scount+j],(int)counts[i*scount+j],(int)trans[i*scount*scount+j*scount+0]);
-					psum += (cps[i*scount+j]*(p / q));
+//i,j,k,p,q,cps[i*scount+j],(int)counts[i*scount+j],(int)trans[i*scount*scount+j*scount+k]);
+//}
+					psum += m;
 //printf("psum: %f\n",psum);
+//scheck += (p/q);
+//printf("scheck: %f\n",scheck);
 					if(r <= psum) {
 						/*
 						 * found it
 						 */
 						incr = k;
-						trans[i*scount*scount+j*scount+k] += 1;
-						counts[i*scount+j] += 1;
+						/*
+						 * update output version
+						 */
+						otrans[i*scount*scount+j*scount+k] += 1;
+						ocounts[i*scount+j] += 1;
 						if(Verbose == 1) {
   	printf("incr (%d,%d) -- %d p: %f q: %f psum: %f r: %f\n",
 							i,j,k,
@@ -140,6 +176,8 @@ int IncrementEpoch(int epoch, double **tcounts, double **ttables, int scount)
 						}
 						free(cps);
 						return(incr);
+					} else {
+//printf("cps: %f p: %f q: %f psum: %f\n",cps[i*scount+j],p,q,psum);
 					}
 				}
 			}
@@ -147,6 +185,7 @@ int IncrementEpoch(int epoch, double **tcounts, double **ttables, int scount)
 	}
 
 	printf("error: couldn't increment epoch %d\n",epoch);
+	scheck = 0.0;
 	for(i=0; i < scount; i++) {
 		for(j=0; j < scount; j++) {
 			printf("(%d,%d) count: %d prob: %f\n",
@@ -263,6 +302,78 @@ int *BusyEpochs(int ecount, int epochs, double **tcounts, double **ttables, int 
 	return(busy_epochs);
 
 }
+
+double **Copyttables(double **ttables, int scount, int epochs)
+{
+	double **ottables;
+	int i;
+	int j;
+	int k;
+	int e;
+	double *trans;
+	double *otrans;
+
+	ottables = (double **)malloc(epochs * sizeof(double *));
+	if(ottables == NULL) {
+		fprintf(stderr,"no space for ttables copy\n");
+		exit(1);
+	}
+	for(e=0; e < epochs; e++) {
+		otrans = (double *)malloc(scount*scount*scount*sizeof(double));
+		if(otrans == NULL) {
+			fprintf(stderr,"no space for otrans at %d\n",e);
+			exit(1);
+		}
+		trans = ttables[e];
+		for(i=0; i < scount; i++) {
+			for(j=0; j < scount; j++) {
+				for(k=0; k < scount; k++) {
+					otrans[i*scount*scount+j*scount+k] =
+					  trans[i*scount*scount+j*scount+k];
+				}
+			}
+		}
+		ottables[e] = otrans;
+	}
+
+	return(ottables);
+}
+
+double **Copytcounts(double **tcounts, int scount, int epochs)
+{
+	int i;
+	int j;
+	int e;
+	double **otcounts;
+	double *counts;
+	double *ocounts; 
+
+	otcounts = (double **)malloc(epochs*sizeof(double *));
+	if(otcounts == NULL) {
+		fprintf(stderr,"no space for otcounts\n");
+		exit(1);
+	}
+
+	for(e=0; e < epochs; e++) {
+		ocounts = (double *)malloc(scount*scount*sizeof(double));
+		if(ocounts == NULL) {
+			fprintf(stderr,"no space for ocounts at %d\n",e);
+			exit(1);
+		}
+		counts = tcounts[e];
+		for(i=0; i < scount; i++) {
+			for(j=0; j < scount; j++) {
+				ocounts[i*scount+j] = counts[i*scount+j];
+			}
+		}
+		otcounts[e] = ocounts;
+	}
+
+	return(otcounts);
+}
+		
+
+	
 						
 int main(int argc, char *argv[])
 {
@@ -280,6 +391,7 @@ int main(int argc, char *argv[])
 	int i;
 	int j;
 	int k;
+	int e;
 	int src;
 	int psrc;
 	int dest;
@@ -293,6 +405,8 @@ int main(int argc, char *argv[])
 	double start_ts;
 	double **ttables;
 	double **tcounts;
+	double **ottables;
+	double **otcounts;
 	int tp;
 	int theperiod;
 	int lastperiod;
@@ -305,7 +419,7 @@ int main(int argc, char *argv[])
 	Period = 0;
 	Use3D = 0;
 	DoIncrement = 0;
-	BusyCount = 0;
+	BusyCount = 1;
 	while((c = getopt(argc,argv,ARGS)) != EOF)
 	{
 		switch(c)
@@ -354,13 +468,6 @@ int main(int argc, char *argv[])
 		fprintf(stderr,"usage: %s",Usage);
 		exit(1);
 	}
-
-	if((BusyCount > 0) && (Use3D == 0)) {
-		fprintf(stderr,"can't use busy count in non 3D mode\n");
-		fprintf(stderr,"%s",Usage);
-		exit(1);
-	}
-		
 
 	field_count = GetFieldCount(Fname);
 
@@ -579,7 +686,11 @@ int main(int argc, char *argv[])
 	 * if we are incrementing, do it here
 	 */
 	if(DoIncrement > 0) {
-		busy_epochs = BusyEpochs(BusyCount,Period,tcounts,ttables,state_count);
+		if(Use3D == 1) {
+			busy_epochs = BusyEpochs(BusyCount,Period,tcounts,ttables,state_count);
+		} else {
+			busy_epochs = BusyEpochs(BusyCount,1,tcounts,ttables,state_count);
+		}
 		if(busy_epochs == NULL) {
 			printf("failed to get busy epochs\n");
 			exit(1);
@@ -588,15 +699,25 @@ int main(int argc, char *argv[])
 			for(i=0; i < BusyCount; i++) {
 				printf("busy[%d]: %d\n",i,busy_epochs[i]);
 			}
-			exit(0);
+		}
+		/*
+		 * make a copy that gets updated so that early updates
+		 * don't influence later conditional probabilities
+		 */
+		if(Use3D == 0) {
+			ottables = Copyttables(ttables,state_count,1);
+			otcounts = Copytcounts(tcounts,state_count,1);
+		} else {
+			ottables = Copyttables(ttables,state_count,Period);
+			otcounts = Copytcounts(tcounts,state_count,Period);
 		}
 		added = 0;
 		j = 0;
 		for(i=0; i < DoIncrement; i++) {
 			if(Use3D == 0) {
-				incr = IncrementEpoch(0,tcounts,ttables,state_count);
+				incr = IncrementEpoch(0,tcounts,ttables,state_count,otcounts,ottables);
 			} else {
-				incr = IncrementEpoch(busy_epochs[j],tcounts,ttables,state_count);
+				incr = IncrementEpoch(busy_epochs[j],tcounts,ttables,state_count,otcounts,ottables);
 			}
 			if(incr < 0) {
 				printf("increment failed\n");
@@ -611,6 +732,25 @@ int main(int argc, char *argv[])
 			}
 		}
 		free(busy_epochs);
+		/*
+		 * replace the original ttables and tcounts with updated
+		 * verion
+		 */
+		if(Use3D == 1) {
+			for(e=0; e < Period; e++) {
+				free(ttables[e]);
+				free(tcounts[e]);
+				ttables[e] = ottables[e];
+				tcounts[e] = otcounts[e];
+			}
+		} else {
+			free(ttables[0]);
+			free(tcounts[0]);
+			ttables[0] = ottables[0];
+			tcounts[0] = otcounts[0];
+		}
+		free(ottables);
+		free(otcounts);
 		if(Verbose == 1) {
 			exit(0);
 		}
