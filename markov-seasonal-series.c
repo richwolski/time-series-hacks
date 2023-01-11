@@ -18,6 +18,7 @@
  */
 
 char *Usage = "markov-seasonal-series -f filename\n\
+\t-B busy_epoch_count\n\
 \t-c sample_count\n\
 \t-i time interval (for synthetic trace)\n\
 \t-I number-of-evdnts-to-add\n\
@@ -25,7 +26,7 @@ char *Usage = "markov-seasonal-series -f filename\n\
 \t-3 <use 3D method>\n\
 \t-V <verbose mode>\n";
 
-#define ARGS "f:Vc:i:P:3I:"
+#define ARGS "f:Vc:i:P:3I:B:"
 
 char Fname[255];
 int Verbose;
@@ -34,6 +35,7 @@ double Interval;
 int Period;
 int Use3D;
 int DoIncrement;
+int BusyCount;
 
 /*
  * this function adds arrivals to the epoch according to the conditional
@@ -41,7 +43,7 @@ int DoIncrement;
  *
  * it returns the total number of arrivals it added to the epoch
  */
-int IncrementEpoch(int epoch, double **tcounts, double**ttables, int scount)
+int IncrementEpoch(int epoch, double **tcounts, double **ttables, int scount)
 {
 	double *trans;
 	double *counts;
@@ -157,6 +159,110 @@ exit(1);
 	free(cps);
 	return(-1);
 }
+
+int *BusyEpochs(int ecount, int epochs, double **tcounts, double **ttables, int scount)
+{
+	int *busy_epochs;
+	double *trans;
+	double *counts;
+	double cptot;
+	double *cps;
+	int i;
+	int j;
+	int e;
+	RB *list;
+	RB *rb;
+	double p;
+	double q;
+	Hval hv;
+
+	busy_epochs = (int *)malloc(ecount * sizeof(int));
+	if(busy_epochs == NULL) {
+		exit(1);
+	}
+	memset(busy_epochs,0,ecount*sizeof(int));
+
+	cps = (double *)malloc(scount*scount*sizeof(double));
+	if(cps == NULL) {
+		exit(1);
+	}
+
+	list = RBTreeInit();
+	if(list == NULL) {
+		exit(1);
+	}
+
+	for(e=0; e < epochs; e++) {
+		trans = ttables[e]; /* transition counts of next state based on pair */
+		counts = tcounts[e]; /* count of each conditional pair */
+
+		/*
+	 	 * count up total number of conditional pairs
+	 	 */
+		cptot = 0.0;
+		for(i=0; i < scount; i++) {
+			for(j=0; j < scount; j++) {
+				cptot += counts[i*scount+j];
+			}
+		}
+		/*
+	 	 * sanity check
+	 	 */
+		if(cptot == 0.0) {
+			free(cps);
+			free(busy_epochs);
+			RBDeleteTree(list);
+			return(NULL);
+		}
+
+		/*
+	 	 * compute probs of each pair
+	 	 */
+		for(i=0; i < scount; i++) {
+			for(j=0; j < scount; j++) {
+				cps[i*scount+j] = counts[i*scount+j]/cptot;
+			}
+		}
+
+		p = 0;
+		/*
+		 * compute total prob of zero in this epoch
+		 */
+		for(i=0; i < scount; i++) {
+			for(j=0; j < scount; j++) {
+				if(counts[i*scount+j] == 0) {
+					continue;
+				}
+				p += (cps[i*scount+j] * 
+					(trans[i*scount*scount+j*scount+0]/counts[i*scount+j]));
+			}
+		}
+		if(p == 0) {
+			continue;
+		}
+		q = 1 - p; /* prob of non zero */
+		hv.i = e;
+		RBInsert(list,q,hv);
+	}
+
+	/*
+	 * take off the top ecount epochs
+	 */
+	e = 0;
+	RB_BACKWARD(list,rb) {
+		busy_epochs[e] = rb->value.i;
+		e++;
+		if(e >= epochs) {
+			break;
+		}
+	}
+
+//	RBDeleteTree(list);
+	free(cps);
+
+	return(busy_epochs);
+
+}
 						
 int main(int argc, char *argv[])
 {
@@ -191,18 +297,24 @@ int main(int argc, char *argv[])
 	int theperiod;
 	int lastperiod;
 	int incr;
+	int added;
+	int *busy_epochs;
 
 	memset(Fname,0,sizeof(Fname));
 	Interval = 1;
 	Period = 0;
 	Use3D = 0;
 	DoIncrement = 0;
+	BusyCount = 0;
 	while((c = getopt(argc,argv,ARGS)) != EOF)
 	{
 		switch(c)
 		{
 			case 'f':
 				strncpy(Fname,optarg,sizeof(Fname));
+				break;
+			case 'B':
+				BusyCount = atoi(optarg);
 				break;
 			case 'V':
 				Verbose = 1;
@@ -240,6 +352,12 @@ int main(int argc, char *argv[])
 	if(Period == 0) {
 		fprintf(stderr,"musty specify period (in lags)\n");
 		fprintf(stderr,"usage: %s",Usage);
+		exit(1);
+	}
+
+	if((BusyCount > 0) && (Use3D == 0)) {
+		fprintf(stderr,"can't use busy count in non 3D mode\n");
+		fprintf(stderr,"%s",Usage);
 		exit(1);
 	}
 		
@@ -461,13 +579,38 @@ int main(int argc, char *argv[])
 	 * if we are incrementing, do it here
 	 */
 	if(DoIncrement > 0) {
+		busy_epochs = BusyEpochs(BusyCount,Period,tcounts,ttables,state_count);
+		if(busy_epochs == NULL) {
+			printf("failed to get busy epochs\n");
+			exit(1);
+		}
+		if(Verbose) {
+			for(i=0; i < BusyCount; i++) {
+				printf("busy[%d]: %d\n",i,busy_epochs[i]);
+			}
+			exit(0);
+		}
+		added = 0;
+		j = 0;
 		for(i=0; i < DoIncrement; i++) {
-			incr = IncrementEpoch(0,tcounts,ttables,state_count);
+			if(Use3D == 0) {
+				incr = IncrementEpoch(0,tcounts,ttables,state_count);
+			} else {
+				incr = IncrementEpoch(busy_epochs[j],tcounts,ttables,state_count);
+			}
 			if(incr < 0) {
 				printf("increment failed\n");
 				exit(1);
 			}
+			added += incr;
+			if(added > DoIncrement) {
+				break;
+			}
+			if(Use3D == 1) {
+				j = (j + 1) % BusyCount;
+			}
 		}
+		free(busy_epochs);
 		if(Verbose == 1) {
 			exit(0);
 		}
