@@ -5,7 +5,7 @@
 #include <math.h>
 
 #include "simple_input.h"
-#include "red_black.h"
+#include "redblack.h"
 
 /*
  * for WTB interarrival times where cameras take sequences
@@ -143,7 +143,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	states = RBTreeInit();
+	states = RBInitD();
 	if(states == NULL) {
 		exit(1);
 	}
@@ -163,11 +163,11 @@ int main(int argc, char *argv[])
 		/*
 		 * assume value is in last field
 		 */
-		rb = RBFind(states,values[field_count-1]);
+		rb = RBFindD(states,values[field_count-1]);
 		if(rb != NULL) {
 			count = rb->value.d + 1.0; 
 			hv.d = count;
-			RBInsert(states,values[field_count-1],hv);
+			RBInsertD(states,values[field_count-1],hv);
 		} else {
 			if(values[field_count-1] > max) {
 				max = values[field_count-1];
@@ -177,7 +177,7 @@ int main(int argc, char *argv[])
 			}
 	
 			hv.d = 1.0;
-			RBInsert(states,values[field_count-1],hv);
+			RBInsertD(states,values[field_count-1],hv);
 		}
 	}
 
@@ -330,7 +330,7 @@ int main(int argc, char *argv[])
 
 		
 	FreeDataSet(input_data);
-	RBDeleteTree(states);
+	RBDestroyD(states);
 	free(values);
 	if(Use3D == 1) {
 		for(i=0; i < Epochs; i++) {
