@@ -7,6 +7,7 @@
 #include "mio.h"
 #include "poisson.h"
 #include "meanvar.h"
+#include "autoc.h"
 #include "yw-estimate.h"
 #include "redblack.h"
 
@@ -23,14 +24,18 @@
 char *Usage = "inar-series -f filename\n\
 \t-c count\n\
 \t-l lags\n\
+\t-p <use parcor coeff>\n\
+\t-P period (for seasonal case)\n\
 \t-V <verbose mode>\n";
 
-#define ARGS "f:l:V"
+#define ARGS "f:l:VpP:"
 
 char Fname[255];
 int Verbose;
 int Sample_count;
 int Lags;
+int Use_parcor;
+int Period;
 
 	
 double EstimateLambda(MIO *d_mio, unsigned long size, int f, 
@@ -99,6 +104,9 @@ int main(int argc, char *argv[])
 	double *history;
 	double y_t;
 	double *alphas;
+	double *pc;
+	double *pc2D;
+	int length;
 
 	memset(Fname,0,sizeof(Fname));
 	Lags = 0;
@@ -115,8 +123,14 @@ int main(int argc, char *argv[])
 			case 'c':
 				Sample_count = atoi(optarg);
 				break;
+			case 'p':
+				Use_parcor = 1;
+				break;
 			case 'l':
 				Lags = atoi(optarg);
+				break;
+			case 'P':
+				Period = atoi(optarg);
 				break;
 			default:
 				fprintf(stderr,
@@ -166,19 +180,51 @@ int main(int argc, char *argv[])
 
 	data = MIOAddr(data_mio);
 
-	alphas = YWEstimate(data_mio,data_fields-1,Lags);
+	if((Period != 0) && (Period > Lags)) {
+		length = Period;
+	} else {
+		length = Lags;
+	}
+
+	alphas = YWEstimate(data_mio,data_fields-1,length);
 	if(alphas == NULL) {
 		fprintf(stderr,"YWestimate failed\n");
 		exit(1);
 	}
 	lambda = EstimateLambda(data_mio, recs, data_fields-1, Lags, alphas);
 
+	if(Use_parcor == 1) {
+		pc2D = (double *)malloc((length+1) *(length+1)*sizeof(double));
+		if(pc2D == NULL) {
+			exit(1);
+		}
+		pc = (double *)malloc(length * sizeof(double));
+		if(pc == NULL) {
+			exit(1);
+		}
+		err = ParCor(data_mio,data_fields-1,length,pc2D);
+		if(err < 0) {
+			fprintf(stderr,"no parcor\n");
+			exit(1);
+		}
+		for(i=1; i <= Lags; i++) {
+			pc[i-1] = pc2D[i*(length+1) + i]; // pc[0] must alpha_1
+		}
+		free(pc2D);
+	}
+
 
 	if(Verbose == 1) {
 		printf("CLS lambda: %f\n",lambda);
-		for(i=1; i <= Lags; i++) {
+		for(i=1; i <= length; i++) {
 			printf("alpha[%d]: %f\n",i,alphas[i-1]);
 		}
+		if(Use_parcor == 1) {
+			for(i=1; i <= length; i++) {
+				printf("pc[%d]: %f\n",i,pc[i-1]);
+			}
+		}
+			
 		exit(1);
 	}
 
@@ -187,34 +233,67 @@ int main(int argc, char *argv[])
 	 *
 	 * prime the pump with initial period
 	 */
-	history = (double *)malloc(Lags * sizeof(double));
+	history = (double *)malloc(length * sizeof(double));
 	if(history == NULL) {
 		exit(1);
 	}
 
-	for(i=0; i < Lags; i++) {
+	for(i=0; i < length; i++) {
 		printf("%10.0f %d\n",data[i*data_fields+0],(int)data[i*data_fields+f]);
 		history[i] = data[i*data_fields+f];
 	}
 
 
-	for(i=Lags; i < recs; i++) {
+	for(i=length; i < recs; i++) {
 		innovation = InvertedPoissonCDF(lambda);
 		y_t = 0.0;
-		for(j=0; j < Lags; j++) {
-			y_t += BernoulliThin(history[Lags-j],alphas[j]);
+		if((Period == 0) || (Lags > Period)) {
+			for(j=0; j < Lags; j++) {
+				if(Use_parcor == 0) {
+					y_t += BernoulliThin(history[Lags-j-1],
+							alphas[j]);
+				} else {
+					y_t += BernoulliThin(history[Lags-j-1],
+							pc[j]);
+				}
+			}
+			y_t += innovation;
+			printf("%10.0f %d\n",data[i*data_fields+0],(int)y_t);
+			for(j=1; j < Lags; j++) {
+				history[j-1] = history[j];
+			}
+			history[Lags - 1] = y_t;
+		} else {
+			for(j=0; j < Lags; j++) {
+				if(Use_parcor == 0) {
+					y_t += 
+					    BernoulliThin(history[length-j-1],
+                                                        alphas[j]);
+					y_t += BernoulliThin(history[j],
+                                                        alphas[length-j-1]);
+				} else {
+					y_t += 
+					    BernoulliThin(history[length-j-1],
+                                                        pc[j]);
+					y_t += BernoulliThin(history[j],
+                                                        pc[length-j-1]);
+				}
+			}
+			y_t += innovation;
+			printf("%10.0f %d\n",data[i*data_fields+0],(int)y_t);
+			for(j=1; j < length; j++) {
+				history[j-1] = history[j];
+			}
+			history[length - 1] = y_t;
 		}
-		y_t += innovation;
-		printf("%10.0f %d\n",data[i*data_fields+0],(int)y_t);
-		for(j=1; j < Lags; j++) {
-			history[j-1] = history[j];
-		}
-		history[Lags - 1] = y_t;
 	}
 		
 
 	MIOClose(data_mio);
 	free(alphas);
+	if(Use_parcor == 1) {
+		free(pc);
+	}
 
 	return(0);
 }

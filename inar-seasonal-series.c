@@ -108,6 +108,75 @@ int BernoulliThin(int x, double phi)
 	return(sum);
 }
 
+int BernoulliThin2(int x1, int x2, double phi1, double phi2)
+{
+	double r;
+	int i;
+	int sum = 0;
+	double p1; // prob that both live
+	double p2; // prob that x1 lives and x2 does not
+	double p3; // prob that x1 does not and x2 does
+	double p4; // prob that neither survives
+
+	p1 = phi1 * phi2;
+	p2 = phi1 * (1.0 - phi2);
+	p3 = (1.0 - phi1) * phi2;
+	p4 = (1.0 - phi1) * (1.0 - phi2);
+
+	/*
+	 * sanity check
+	 */
+	if((p1+p2+p3+p4) != 1.0) {
+		printf("p1: %f p2: %f p3: %f p4: %f\n",
+				p1,p2,p3,p4);
+		exit(1);
+	}
+	/*
+	 * use the smaller of the 2
+	 */
+	if(x1 > x2) {
+		for(i=0; i < x2; i++) {
+			r = drand48();
+			if(r < p1) {
+				sum += 2;
+			} else if((r >= p1) && (r < p2)) {
+				sum += 1;
+			} else if((r >= p2) && (r < p3)) {
+				sum += 1;
+			} else if(r >= p3) {
+				sum += 0;
+			}
+		}
+		for(i=0; i < (x1 - x2); i++) {
+			r = drand48();
+			if(r < phi1) {
+				sum += 1;
+			}
+		}
+	} else {
+		for(i=0; i < x1; i++) {
+			r = drand48();
+			if(r < p1) {
+				sum += 2;
+			} else if((r >= p1) && (r < p2)) {
+				sum += 1;
+			} else if((r >= p2) && (r < p3)) {
+				sum += 1;
+			} else if(r >= p3) {
+				sum += 0;
+			}
+		}
+		for(i=0; i < (x2 - x1); i++) {
+			r = drand48();
+			if(r < phi2) {
+				sum += 1;
+			}
+		}
+	}
+		
+	return(sum);
+}
+
 int main(int argc, char *argv[])
 {
 	int c;
@@ -123,9 +192,12 @@ int main(int argc, char *argv[])
 	unsigned long recs;
 	double phi;
 	double lambda;
+	double phi1;
+	double lambda1;
 	int f;
 	int y_t;
 	int y_t_minus_s;
+	int y_t_minus_1;
 	int innovation;
 	double *history;
 
@@ -198,6 +270,9 @@ int main(int argc, char *argv[])
 	phi = EstimatePhi(data, recs, data_fields, Period);
 	lambda = EstimateLambda(data, recs, data_fields, Period, phi);
 
+	phi1 = EstimatePhi(data, recs, data_fields, 1);
+	lambda1 = EstimateLambda(data, recs, data_fields, 1, phi1);
+
 	if(Verbose == 1) {
 		printf("CLS phi: %f, lambda: %f\n",phi,lambda);
 	}
@@ -211,12 +286,16 @@ int main(int argc, char *argv[])
 	if(history == NULL) {
 		exit(1);
 	}
+
 	for(i=0; i < Period; i++) {
 		printf("%10.0f %d\n",data[i*data_fields+0],(int)data[i*data_fields+f]);
 		history[i] = data[i*data_fields+f];
 	}
 
+
 	y_t_minus_s = history[0];
+	y_t_minus_1 = history[Period-1];
+	
 	for(i=Period; i < recs; i++) {
 		innovation = InvertedPoissonCDF(lambda);
 		y_t = BernoulliThin(y_t_minus_s,phi) + innovation;
@@ -226,6 +305,7 @@ int main(int argc, char *argv[])
 		}
 		history[Period - 1] = y_t;
 		y_t_minus_s = history[0];
+		y_t_minus_1 = y_t;
 	}
 		
 
