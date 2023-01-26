@@ -39,7 +39,7 @@ int Period;
 
 	
 double EstimateLambda(MIO *d_mio, unsigned long size, int f, 
-		int lags, double* alphas)
+		int lags, int period, double* alphas)
 {
 	int i;
 	double mu;
@@ -57,7 +57,12 @@ double EstimateLambda(MIO *d_mio, unsigned long size, int f,
 	sum = 1.0;
 	for(i=0; i < lags; i++) {
 		sum -= alphas[i];
+		if((period != 0) && (period > lags)) {
+			sum -= alphas[period-1-i];
+		} 
 	} 
+
+		
 
 	lambda = mu * sum;
 
@@ -186,12 +191,13 @@ int main(int argc, char *argv[])
 		length = Lags;
 	}
 
-	alphas = YWEstimate(data_mio,data_fields-1,length);
+	alphas = YWEstimate(data_mio,data_fields-1,length+5);
 	if(alphas == NULL) {
 		fprintf(stderr,"YWestimate failed\n");
 		exit(1);
 	}
-	lambda = EstimateLambda(data_mio, recs, data_fields-1, Lags, alphas);
+	lambda = EstimateLambda(data_mio, recs, data_fields-1, Lags, Period,
+			alphas);
 
 	if(Use_parcor == 1) {
 		pc2D = (double *)malloc((length+1) *(length+1)*sizeof(double));
