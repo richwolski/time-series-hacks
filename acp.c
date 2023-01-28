@@ -98,7 +98,7 @@ double *ACPGrad(double *data, int fields, int f, int t, double *lam, double ll,
 	}
 
 	for(i=0; i < count; i++) {
-		new[i] = (data[t*fields+f] - lam[t]) / lam[t];
+		new[i] = ((data[t*fields+f] - lam[t]) / lam[t]) * coeff[i];
 	}
 
 	return(new);
