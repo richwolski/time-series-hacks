@@ -1,5 +1,5 @@
-#include <stdlib.h>
 #include <unistd.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -36,7 +36,7 @@ int Period;
 double Rate;
 int Iterations;
 
-double ACPLogLike(double *data, int t, double *lam, double omega,
+double ACPLogLike(double *data, int fields, int f, int t, double *lam, double omega,
                               double *alphas, int arlags, 
 			      double *betas, int llags)
 {
@@ -51,7 +51,7 @@ double ACPLogLike(double *data, int t, double *lam, double omega,
 	 * compute AR terms
 	 */
 	for(i=0; i < arlags; i++) {
-		sum += (alphas[i] * data[t-i-1]);
+		sum += (alphas[i] * data[(t-i-1)*fields + f]);
 	}
 
 	/*
@@ -65,11 +65,14 @@ double ACPLogLike(double *data, int t, double *lam, double omega,
 	 * update lambda
 	 */
 	lam[t] = sum;
+	if(lam[t] == 0) {
+		lam[t] = 0.00001;
+	}
 
 	/*
 	 * compute log of y_t!
 	 */
-	y_t = data[t];
+	y_t = data[t*fields+f];
 	sum = 0;
 	for(i=1; i <= y_t; i++) {
 		sum += log(i);
@@ -79,11 +82,11 @@ double ACPLogLike(double *data, int t, double *lam, double omega,
 	/*
 	 * lloglike = N_t * log(lam_t) - lam[t] - log(N_t!)
 	 */
-	ll = (data[t] * log(lam[t])) - lam[t] - lgnfac;
+	ll = (data[t*fields+f] * log(lam[t])) - lam[t] - lgnfac;
 	return(ll);
 }
 
-double *ACPGradUpdate(double *data, int t, double *lam, double ll, 
+double *ACPGrad(double *data, int fields, int f, int t, double *lam, double ll, 
 		double *coeff, int count, double rate)
 {
 	double *new;
@@ -95,9 +98,7 @@ double *ACPGradUpdate(double *data, int t, double *lam, double ll,
 	}
 
 	for(i=0; i < count; i++) {
-		new[i] = -1.0 * rate *
-			(((data[t] - lam[t]) / lam[t]) * coeff[i]) * ll;
-		new[i] += coeff[i];
+		new[i] = (data[t*fields+f] - lam[t]) / lam[t];
 	}
 
 	return(new);
@@ -119,9 +120,12 @@ int main(int argc, char *argv[])
 	unsigned long size;
 	unsigned long recs;
 	double *alphas;
-	double *newalphas;
+	double *totalphagrad;
+	double *newalphagrad;
 	double *betas;
-	double *newbetas;
+	double *newbetagrad;
+	double *totbetagrad;
+	double totalgrad;
 	double mu;
 	double var;
 	double omega;
@@ -241,12 +245,12 @@ int main(int argc, char *argv[])
 
 	sum = 0;
 	for(i=0; i < ARLags; i++) {
-		alphas[i] = 0.5 / (double)ARLags;
+		alphas[i] = 0.5 / (double)(ARLags+LLags);
 		sum += alphas[i];
 	}
 
 	for(i=0; i < LLags; i++) {
-		betas[i] = 0.5 / (double)LLags;
+		betas[i] = 0.5 / (double)(ARLags+LLags);
 		sum += betas[i];
 	}
 
@@ -277,17 +281,47 @@ int main(int argc, char *argv[])
 		lam[i] = mu;
 	}
 
+	totalphagrad = (double *)malloc(ARLags * sizeof(double));
+	if(totalphagrad == NULL) {
+		exit(1);
+	}
+	totbetagrad = (double *)malloc(LLags * sizeof(double));
+	if(totbetagrad == NULL) {
+		exit(1);
+	}
 	for(j = 0; j < Iterations; j++) {
-		for(t=start; i < recs; t++) {
-			ll = ACPLogLike(data,t,lam,
+		totalgrad = 0;
+		memset(totalphagrad,0,ARLags*sizeof(double));
+		memset(totbetagrad,0,LLags*sizeof(double));
+		for(t=start; t < recs; t++) {
+			ll = ACPLogLike(data,data_fields,f,t,lam,
 					omega,alphas,ARLags,betas,LLags); 
-			newalphas = ACPGradUpdate(data,t,lam,ll,alphas,ARLags,Rate);
-			free(alphas);
-			alphas = newalphas;
-			newbetas = ACPGradUpdate(data,t,lam,ll,betas,LLags,Rate);
-			free(betas);
-			betas = newbetas;
+			newalphagrad = ACPGrad(data,data_fields,f,t,lam,ll,alphas,ARLags,Rate);
+			newbetagrad = ACPGrad(data,data_fields,f,t,lam,ll,betas,LLags,Rate);
+			for(i=0; i < ARLags; i++) {
+				totalphagrad[i] += newalphagrad[i];
+			}
+			for(i=0; i < LLags; i++) {
+				totbetagrad[i] += newbetagrad[i];
+			}
+			totalgrad++;
+			free(newalphagrad);
+			free(newbetagrad);
 		}
+		for(i=0; i < ARLags; i++) {
+			alphas[i] = alphas[i] - (Rate*(totalphagrad[i]/totalgrad)*ll);
+		}
+		for(i=0; i < LLags; i++) {
+			betas[i] = betas[i] - (Rate*(totbetagrad[i]/totalgrad)*ll);
+		}
+		sum = 0;
+		for(i=0; i < ARLags; i++) {
+			sum += alphas[i];
+		}
+		for(i=0; i < LLags; i++) {
+			sum += betas[i];
+		}
+		omega = mu * (1 - sum); 
 	}
 
 	if(Verbose == 1) {
@@ -310,4 +344,3 @@ int main(int argc, char *argv[])
 	return(0);
 }
 
-	
