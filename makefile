@@ -1,7 +1,7 @@
 CC = gcc
 CFLAGS = "-g"
 
-ALL = diffseries winmax interarrival-run markov-series markov-seasonal-series inar-seasonal-series inar-series
+ALL = diffseries winmax interarrival-run markov-series markov-seasonal-series inar-seasonal-series inar-series acp acp-gen
 all: ${ALL}
 
 MIO=../mio
@@ -31,6 +31,12 @@ inar-seasonal-series: inar-seasonal-series.c ${MIO}/mio.h ${MIOLIB} ${DIST}/pois
 
 inar-series: inar-series.c ../autoc/yw-estimate.h ${MIO}/mio.h ${MIOLIB} ${DIST}/poisson.h ${DISTLIB} 
 	${CC} ${CFLAGS} -I../autoc -I../meanvar -I${MIO} -I${DIST} -o inar-series inar-series.c ${MIOLIB} ${DISTLIB} ${YWLIB}
+
+acp: acp.c ${MIO}/mio.h ${MIOLIB} ${DIST}/poisson.h ${DISTLIB} 
+	${CC} ${CFLAGS} -I../meanvar -I${MIO} -I${DIST} -o acp acp.c ${MIOLIB} ${DISTLIB} ${YWLIB}
+
+acp-gen: acp-gen.c ${DIST}/poisson.h ${DISTLIB} 
+	${CC} ${CFLAGS} -I${DIST} -o acp-gen acp-gen.c ${DISTLIB}
 
 simple_input.o: simple_input.h simple_input.c
 	${CC} ${CFLAGS} -c simple_input.c
