@@ -86,24 +86,116 @@ double ACPLogLike(double *data, int fields, int f, int t, double *lam, double om
 	return(ll);
 }
 
-double *ACPGrad(double *data, int fields, int f, int t, double *lam, double ll, 
-		double *coeff, int count, double rate)
+/*
+ * returns a verctor of partials for omega, the alphas, and the betas
+ * 
+ * the partials all use the beta weighted sume of previous partials (each of
+ * which is a vector)
+ *
+ * the partials also requite previous data values (for the alphas) and
+ * previous u_t values (for the betas)
+ */
+double *Partialmu_t(double *data, int fields, int f, int t, double omega, double *alphas, int acount, double *betas,
+			int bcount, double *mu_history, double **partial_hist)
+{
+	double *part;
+	double *prev_part;
+	int p;
+	int i;
+	double sum;
+
+	part = (double *)malloc((acount+bcount+1)* sizeof(double));
+	if(part == NULL) {
+		exit(1);
+	}
+
+	
+	/*
+	 * compute the sum of previous partials
+	 *
+	 * first element in partial is omega
+	 */
+	sum = 0;
+	for(p = 0; p < bcount; p++) {
+		prev_part = partial_hist[p];
+		sum += (prev_part[0] * betas[p]);
+	}
+
+	/*
+	 * 0 is the omega term
+	 */
+	sum += 1;
+	part[0] = sum;
+
+	/*
+	 * now do the alphas (after omgea in partials array)
+	 */
+	for(i=0; i < acount; i++) {
+		sum = 0;
+		for(p = 0; p < bcount; p++) {
+			prev_part = partial_hist[p];
+			sum += (prev_part[i+1] * betas[p]);
+		}
+		sum += data[t*fields+f - i - 1];
+		part[i+1] = sum;
+	}
+
+	/*
+	 * now do the betas
+	 */
+	for(i=0; i < bcount; i++) {
+		sum = 0;
+		for(p = 0; p < bcount; p++) {
+			prev_part = partial_hist[p];
+			sum += (prev_part[i+1+acount] * betas[p]);
+		}
+		sum += mu_history[i]; /* first element is mu_(t-1) */
+		part[i+1+acount] = sum;
+	}
+
+	return(part);
+}
+
+
+	
+/*
+ * computes the partial of ll with respect to parameters omega, alphas, and
+ * betas
+ *
+ * requires the partial of mu_t at t which requires previous partials of mu_t
+ * and previous values of mu
+ */
+
+double *ACPGrad(double *data, int fields, int f, int t, double *lam,
+		double omega, double *alphas, int acount, double *betas, int bcount, 
+		double *lam_history, double **part_hist)
 {
 	double *new;
 	int i;
+	double *part;
 
-	new = (double *)malloc(count * sizeof(double));
+	/*
+	 * get partials for u_t
+	 */
+	part = Partialmu_t(data,fields,f,t,
+			   omega,alphas,acount,betas,bcount,
+			   lam_history,part_hist);
+	if(part == NULL) {
+		exit(1);
+	}
+
+	new = (double *)malloc((acount+bcount+1) * sizeof(double));
 	if(new == NULL) {
 		exit(1);
 	}
 
-	for(i=0; i < count; i++) {
-		new[i] = ((data[t*fields+f] - lam[t]) / lam[t]) * coeff[i];
+	for(i=0; i < (acount+bcount+1); i++) {
+		new[i] = ((data[t*fields+f] - lam[t]) / lam[t]) * part[i];
 	}
 
 	return(new);
 }
-		
+
 	
 int main(int argc, char *argv[])
 {
@@ -120,11 +212,9 @@ int main(int argc, char *argv[])
 	unsigned long size;
 	unsigned long recs;
 	double *alphas;
-	double *totalphagrad;
-	double *newalphagrad;
+	double *totgrad;
 	double *betas;
 	double *newbetagrad;
-	double *totbetagrad;
 	double totalgrad;
 	double mu;
 	double var;
@@ -133,6 +223,10 @@ int main(int argc, char *argv[])
 	int start;
 	double ll;
 	double sum;
+	double *grad;
+	double *lam_history;
+	double **part_history;
+	double *plam;
 
 	memset(Fname,0,sizeof(Fname));
 	ARLags = 0;
@@ -281,47 +375,84 @@ int main(int argc, char *argv[])
 		lam[i] = mu;
 	}
 
-	totalphagrad = (double *)malloc(ARLags * sizeof(double));
-	if(totalphagrad == NULL) {
+	totgrad = (double *)malloc((ARLags+LLags+1) * sizeof(double));
+	if(totgrad == NULL) {
 		exit(1);
 	}
-	totbetagrad = (double *)malloc(LLags * sizeof(double));
-	if(totbetagrad == NULL) {
+	lam_history = (double *)malloc(LLags * sizeof(double));
+	if(lam_history == NULL) {
 		exit(1);
 	}
-	for(j = 0; j < Iterations; j++) {
+	memset(lam_history,0,LLags * sizeof(double));
+
+	part_history = (double **)malloc(LLags * sizeof(double *));
+	if(part_history == NULL) {
+		exit(1);
+	}
+	for(i=0; i < LLags; i++) {
+		part_history[i] = (double *)malloc((ARLags+LLags+1)*sizeof(double));
+		if(part_history == NULL) {
+			exit(1);
+		}
+		memset(part_history[i],0,(ARLags+LLags+1)*sizeof(double));
+	}
+
+	for(j=0; j < Iterations; j++) {
+		for(i=0; i < LLags; i++) {
+			memset(part_history[i],0,(ARLags+LLags+1)*sizeof(double));
+		}
+		memset(lam_history,0,LLags * sizeof(double));
 		totalgrad = 0;
-		memset(totalphagrad,0,ARLags*sizeof(double));
-		memset(totbetagrad,0,LLags*sizeof(double));
+		memset(totgrad,0,(ARLags+LLags+1)*sizeof(double));
 		for(t=start; t < recs; t++) {
-			ll = ACPLogLike(data,data_fields,f,t,lam,
-					omega,alphas,ARLags,betas,LLags); 
-			newalphagrad = ACPGrad(data,data_fields,f,t,lam,ll,alphas,ARLags,Rate);
-			newbetagrad = ACPGrad(data,data_fields,f,t,lam,ll,betas,LLags,Rate);
+			/*
+			 * compute current lam_t
+			 */
+			lam[t] = omega;
 			for(i=0; i < ARLags; i++) {
-				totalphagrad[i] += newalphagrad[i];
+				lam[t] += (alphas[i] * data[(t-i-1)*data_fields+f]);
 			}
 			for(i=0; i < LLags; i++) {
-				totbetagrad[i] += newbetagrad[i];
+				lam[t] += (betas[i] * lam_history[i]);
+			}
+			grad = ACPGrad(data,data_fields,f,t,lam,
+					omega, alphas,ARLags, betas, LLags,
+					lam_history,part_history);
+			for(i=0; i < (ARLags+LLags+1); i++) {
+				totgrad[i] += grad[i];
 			}
 			totalgrad++;
-			free(newalphagrad);
-			free(newbetagrad);
+			free(grad);
+			plam = Partialmu_t(data,data_fields,f,t,
+					   omega,alphas,ARLags,betas,LLags,
+					   lam_history,part_history);
+			if(plam == NULL) {
+				exit(1);
+			}
+			/*
+			 * age the histories
+			 */
+			free(part_history[0]);
+			for(i=0; i < LLags-1; i++) {
+				lam_history[i] = lam_history[i+1];
+				part_history[i] = part_history[i+1];
+			}
+			lam_history[LLags-1] = lam[t];
+			part_history[LLags-1] = plam;
 		}
+
+		/*
+		 * update the parameters using LL and average gradient
+	 	 */
+		ll = ACPLogLike(data,data_fields,f,t,lam,
+					omega,alphas,ARLags,betas,LLags); 
+		omega = omega - (Rate * (totgrad[0] / totalgrad)* -1.0 *ll);
 		for(i=0; i < ARLags; i++) {
-			alphas[i] = alphas[i] - (Rate*(totalphagrad[i]/totalgrad)*ll);
+			alphas[i] = alphas[i] - (Rate*(totgrad[i+1]/totalgrad) * -1.0 * ll);
 		}
 		for(i=0; i < LLags; i++) {
-			betas[i] = betas[i] - (Rate*(totbetagrad[i]/totalgrad)*ll);
+			betas[i] = betas[i] - (Rate*(totgrad[i+ARLags+1]/totalgrad) * -1.0 * ll);
 		}
-		sum = 0;
-		for(i=0; i < ARLags; i++) {
-			sum += alphas[i];
-		}
-		for(i=0; i < LLags; i++) {
-			sum += betas[i];
-		}
-		omega = mu * (1 - sum); 
 	}
 
 	if(Verbose == 1) {
