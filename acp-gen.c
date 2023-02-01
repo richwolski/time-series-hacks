@@ -73,9 +73,9 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	mu_t_minus_1 = 1;
+	mu_t_minus_1 = 0;
 	n_t_minus_1 = 1;
-	mu_t = Omega + Alpha * n_t_minus_1 + Beta * mu_t_minus_1;
+	mu_t = Omega + (Alpha * n_t_minus_1) + (Beta * mu_t_minus_1);
 	n_t = InvertedPoissonCDF(mu_t);
 	n_t_minus_1 = n_t;
 	mu_t_minus_1 = mu_t;
