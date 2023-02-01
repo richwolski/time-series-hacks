@@ -17,15 +17,17 @@
  * including zeros, in each interval
  */
 
-char *Usage = "acp -f filename\n\
+char *Usage = "acp-mc -f filename\n\
 \t-I iterations (for gradient descent)\n\
 \t-R rate (learning rate)\n\
 \t-l ar lags\n\
 \t-L lambda lags\n\
 \t-P period (for seasonal case)\n\
+\t-M monte-carlo iterations\n\
 \t-V <verbose mode>\n";
 
-#define ARGS "f:l:L:VP:I:R:"
+#define ARGS "f:l:L:VP:I:R:M:"
+
 
 char Fname[255];
 int Verbose;
@@ -35,39 +37,17 @@ int LLags;
 int Period;
 double Rate;
 int Iterations;
+int MC;
 
 double ACPLogLike(double *data, int fields, int f, int t, double *lam, double omega,
                               double *alphas, int arlags, 
 			      double *betas, int llags)
 {
-	int i;
-	double sum = 0.0;
+	double i;
 	double lgnfac = 0.0;
 	double ll;
 	double y_t;
-
-	sum = omega;
-	/*
-	 * compute AR terms
-	 */
-	for(i=0; i < arlags; i++) {
-		sum += (alphas[i] * data[(t-i-1)*fields + f]);
-	}
-
-	/*
-	 * compute lambda terms
-	 */
-	for(i=0; i < llags; i++) {
-		sum += (betas[i] * lam[t-i-1]);
-	}
-
-	/*
-	 * update lambda
-	 */
-	lam[t] = sum;
-	if(lam[t] == 0) {
-		lam[t] = 0.00001;
-	}
+	double sum;
 
 	/*
 	 * compute log of y_t!
@@ -86,6 +66,22 @@ double ACPLogLike(double *data, int fields, int f, int t, double *lam, double om
 	return(ll);
 }
 
+double TotLogLike(double *data, int fields, int f, int recs, double *lam, double omega,
+                              double *alphas, int arlags, 
+			      double *betas, int llags)
+{
+	int i;
+	double lgnfac = 0.0;
+	double ll;
+	double y_t;
+
+	ll = 0;
+	for(i=0; i < recs; i++) {
+		ll += ACPLogLike(data,fields,f,i,lam,omega,alphas,arlags,betas,llags);
+	}
+
+	return(ll);
+}
 /*
  * returns a verctor of partials for omega, the alphas, and the betas
  * 
@@ -95,7 +91,8 @@ double ACPLogLike(double *data, int fields, int f, int t, double *lam, double om
  * the partials also requite previous data values (for the alphas) and
  * previous u_t values (for the betas)
  */
-double *Partialmu_t(double *data, int fields, int f, int t, double omega, double *alphas, int acount, double *betas,
+double *Partialmu_t(double *data, int fields, int f, int t, 
+			double omega, double *alphas, int acount, double *betas,
 			int bcount, double *mu_history, double **partial_hist)
 {
 	double *part;
@@ -109,6 +106,10 @@ double *Partialmu_t(double *data, int fields, int f, int t, double omega, double
 		exit(1);
 	}
 
+/*
+prev_part = partial_hist[0];
+printf("prev[%d]: %f, betas[%d]: %f\n",1,prev_part[1],0,betas[0]);
+*/
 	
 	/*
 	 * compute the sum of previous partials
@@ -132,10 +133,16 @@ double *Partialmu_t(double *data, int fields, int f, int t, double omega, double
 	 */
 	for(i=0; i < acount; i++) {
 		sum = 0;
+		/*
+		 * previous partials
+		 */
 		for(p = 0; p < bcount; p++) {
 			prev_part = partial_hist[p];
 			sum += (prev_part[i+1] * betas[p]);
 		}
+		/*
+		 * current partial
+		 */
 		sum += data[t*fields+f - i - 1];
 		part[i+1] = sum;
 	}
@@ -155,7 +162,6 @@ double *Partialmu_t(double *data, int fields, int f, int t, double omega, double
 
 	return(part);
 }
-
 
 	
 /*
@@ -193,8 +199,37 @@ double *ACPGrad(double *data, int fields, int f, int t, double *lam,
 		new[i] = ((data[t*fields+f] - lam[t]) / lam[t]) * part[i];
 	}
 
+	free(part);
+
 	return(new);
 }
+
+int ChooseTheta(double *alphas, int acount, double *betas, int bcount)
+{
+	int i;
+	double sum;
+	int done = 0;
+
+	while(!done) {
+		sum = 0;
+		for(i=0; i < acount; i++) {
+			alphas[i] = drand48();
+			sum += (alphas[i] * alphas[i]);
+		}
+		for(i=0; i < bcount; i++) {
+			betas[i] = drand48();
+			sum += (betas[i] * betas[i]);
+		}
+		if(sum < 1) {
+			done = 1;
+		}
+	}
+
+	return(0);
+}
+
+	
+	
 
 	
 int main(int argc, char *argv[])
@@ -205,6 +240,8 @@ int main(int argc, char *argv[])
 	int j;
 	int t;
 	int f;
+	int k;
+	int m;
 	MIO *data_mio;
 	MIO *raw_mio;
 	double *data;
@@ -227,12 +264,20 @@ int main(int argc, char *argv[])
 	double *lam_history;
 	double **part_history;
 	double *plam;
+	double totll;
+	double old_ll;
+	double new_ll;
+	double *max_a;
+	double *max_b;
+	double max_o;
+	double max_ll;
 
 	memset(Fname,0,sizeof(Fname));
 	ARLags = 0;
 	LLags = 0;
 	Iterations = 1;
 	Rate = 0.01;
+	MC = 1;
 	while((c = getopt(argc,argv,ARGS)) != EOF)
 	{
 		switch(c)
@@ -260,6 +305,9 @@ int main(int argc, char *argv[])
 				break;
 			case 'R':
 				Rate = atof(optarg);
+				break;
+			case 'M':
+				MC = atoi(optarg);
 				break;
 			default:
 				fprintf(stderr,
@@ -337,27 +385,6 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	sum = 0;
-	for(i=0; i < ARLags; i++) {
-		alphas[i] = 0.5 / (double)(ARLags+LLags);
-		sum += alphas[i];
-	}
-
-	for(i=0; i < LLags; i++) {
-		betas[i] = 0.5 / (double)(ARLags+LLags);
-		sum += betas[i];
-	}
-
-	err = MeanVar(data_mio,f,&mu,&var);
-	if(err < 0) {
-		exit(1);
-	}
-
-	/*
-	 * unconditional expectation mu = omega / (1 - sum(alphas and betas)
-	 */
-	omega = mu * (1 - sum);
-	
 	lam = (double *)malloc(recs * sizeof(double));
 	if(lam == NULL) {
 		exit(1);
@@ -397,80 +424,180 @@ int main(int argc, char *argv[])
 		memset(part_history[i],0,(ARLags+LLags+1)*sizeof(double));
 	}
 
-	for(j=0; j < Iterations; j++) {
-		for(i=0; i < LLags; i++) {
-			memset(part_history[i],0,(ARLags+LLags+1)*sizeof(double));
+	err = MeanVar(data_mio,f,&mu,&var);
+	if(err < 0) {
+		exit(1);
+	}
+
+	max_a = (double *)malloc(ARLags * sizeof(double));
+	if(max_a == NULL) {
+		exit(1);
+	}
+	max_b = (double *)malloc(LLags * sizeof(double));
+	if(max_b == NULL) {
+		exit(1);
+	}
+
+	max_ll = -9999999999999.9;
+
+
+	for(m=0; m < MC; m++) {
+		err = ChooseTheta(alphas,ARLags,betas,LLags);
+		if(err < 0) {
+			exit(1);
 		}
-		memset(lam_history,0,LLags * sizeof(double));
-		totalgrad = 0;
-		memset(totgrad,0,(ARLags+LLags+1)*sizeof(double));
-		for(t=start; t < recs; t++) {
-			/*
-			 * compute current lam_t
-			 */
-			lam[t] = omega;
-			for(i=0; i < ARLags; i++) {
-				lam[t] += (alphas[i] * data[(t-i-1)*data_fields+f]);
-			}
-			for(i=0; i < LLags; i++) {
-				lam[t] += (betas[i] * lam_history[i]);
-			}
-			grad = ACPGrad(data,data_fields,f,t,lam,
-					omega, alphas,ARLags, betas, LLags,
-					lam_history,part_history);
-			for(i=0; i < (ARLags+LLags+1); i++) {
-				totgrad[i] += grad[i];
-			}
-			totalgrad++;
-			free(grad);
-			plam = Partialmu_t(data,data_fields,f,t,
-					   omega,alphas,ARLags,betas,LLags,
-					   lam_history,part_history);
-			if(plam == NULL) {
-				exit(1);
-			}
-			/*
-			 * age the histories
-			 */
-			free(part_history[0]);
-			for(i=0; i < LLags-1; i++) {
-				lam_history[i] = lam_history[i+1];
-				part_history[i] = part_history[i+1];
-			}
-			lam_history[LLags-1] = lam[t];
-			part_history[LLags-1] = plam;
+		sum = 0;
+		for(i=0; i < ARLags; i++) {
+			sum += alphas[i];
 		}
 
-		/*
-		 * update the parameters using LL and average gradient
-	 	 */
-		ll = ACPLogLike(data,data_fields,f,t,lam,
-					omega,alphas,ARLags,betas,LLags); 
-		omega = omega - (Rate * (totgrad[0] / totalgrad)* -1.0 *ll);
-		for(i=0; i < ARLags; i++) {
-			alphas[i] = alphas[i] - (Rate*(totgrad[i+1]/totalgrad) * -1.0 * ll);
-		}
 		for(i=0; i < LLags; i++) {
-			betas[i] = betas[i] - (Rate*(totgrad[i+ARLags+1]/totalgrad) * -1.0 * ll);
+			sum += betas[i];
+		}
+		/*
+		 * unconditional expectation mu = omega / (1 - sum(alphas and betas)
+		 */
+		omega = mu * (1 - sum);
+		
+		for(j=0; j < Iterations; j++) {
+			ll = 0;
+			totll = 0;
+			memset(totgrad,0,(ARLags+LLags+1)*sizeof(double));
+			totalgrad = 0;
+			for(i=0; i < LLags; i++) {
+				memset(part_history[i],0,(ARLags+LLags+1)*sizeof(double));
+			}
+			memset(lam_history,0,LLags * sizeof(double));
+			for(t=0; i < start; i++) {
+				lam_history[i] = mu;
+			}
+			for(t=start; t < recs; t++) {
+	//			if(data[t*data_fields+f] == 0) {
+	//				continue;
+	//			}
+				/*
+				 * compute current lam_t
+				 */
+				lam[t] = omega;
+				for(i=0; i < ARLags; i++) {
+					lam[t] += (alphas[i] * data[(t-i-1)*data_fields+f]);
+				}
+				for(i=0; i < LLags; i++) {
+					lam[t] += (betas[i] * lam_history[i]);
+				}
+				grad = ACPGrad(data,data_fields,f,t,lam,
+						omega, alphas,ARLags, betas, LLags,
+						lam_history,part_history);
+				for(i=0; i < (ARLags+LLags+1); i++) {
+					totgrad[i] += grad[i];
+				}
+				totalgrad++;
+				ll += ACPLogLike(data,data_fields,f,t,lam,
+						omega,alphas,ARLags,betas,LLags); 
+				totll++;
+				plam = Partialmu_t(data,data_fields,f,t,
+						   omega,alphas,ARLags,betas,LLags,
+						   lam_history,part_history);
+				if(plam == NULL) {
+					exit(1);
+				}
+	/*
+	printf("LL: %f\n",ll/totalgrad);
+	for(k=0; k < (ARLags + LLags + 1); k++) {
+			printf("\t[%d]: %f\n",k,plam[k]);
+	}
+				omega = omega + (Rate * grad[0]);
+				for(i=0; i < ARLags; i++) {
+					alphas[i] = alphas[i] + (Rate*grad[i+1]);
+				}
+				for(i=0; i < LLags; i++) {
+					betas[i] = betas[i] + (Rate*grad[i+ARLags+1]);
+				}
+	*/
+	/*
+	for(k=0; k < (ARLags+LLags+1); k++) {
+	printf("avggrad[%d]: %f\n",k,totgrad[k]/totalgrad);
+	}
+	*/
+				free(grad);
+				/*
+				 * age the histories
+				 * most recent values are in [0] location
+				 * so we age off the end
+				 */
+				free(part_history[LLags-1]);
+				for(i=LLags-2; i >= 0; i--) {
+					lam_history[i+1] = lam_history[i];
+					part_history[i+1] = part_history[i];
+				}
+				lam_history[0] = lam[t];
+				part_history[0] = plam;
+			}
+
+
+			/*
+			 * update the parameters using LL and average gradient
+			 */
+
+			omega = omega + (Rate * (totgrad[0] / totalgrad));
+
+			for(i=0; i < ARLags; i++) {
+				alphas[i] = alphas[i] + (Rate*(totgrad[i+1]/totalgrad));
+			}
+			for(i=0; i < LLags; i++) {
+				betas[i] = betas[i] + (Rate*(totgrad[i+ARLags+1]/totalgrad));
+			}
+			ll = TotLogLike(data,data_fields,f,t,lam,
+					omega,alphas,ARLags,betas,LLags); 
+
+			if(ll > max_ll) {
+				max_ll = ll;
+				max_o = omega;
+				for(i=0; i < ARLags; i++) {
+					max_a[i] = alphas[i];
+				}
+				for(i=0; i < LLags; i++) {
+					max_b[i] = betas[i];
+				}
+			}
+
+			if(Verbose == 1) {
+				printf("iteration: %d, avg ll: %f\n",j,ll);
+				printf("\tomega: %f avggrad: %f\n",omega,totgrad[0] / totalgrad);
+				for(i=0; i < ARLags; i++) {
+					printf("\ta[%d]: %f avggrad: %f\n",i,alphas[i], (totgrad[i+1] / totalgrad));
+				}
+				for(i=0; i < LLags; i++) {
+					printf("\tb[%d]: %f avggrad: %f\n",i,betas[i], totgrad[i+ARLags+1]/totalgrad);
+				}
+			}
+
 		}
 	}
 
 	if(Verbose == 1) {
-		printf("alphas:\n");
+		printf("MLE theta: %f\n",max_ll);
+		printf("\tomega: %f\n",max_o);
 		for(i=0; i < ARLags; i++) {
-			printf("\t%f\n",alphas[i]);
+			printf("\ta[%d]: %f\n",i,max_a[i]);
 		}
-		printf("betas:\n");
 		for(i=0; i < LLags; i++) {
-			printf("\t%f\n",betas[i]);
+			printf("\tb[%d]: %f\n",i,max_b[i]);
 		}
-		exit(1);
 	}
+
+	for(i=0; i < LLags; i++) {
+		free(part_history[i]);
+	}
+	free(part_history);
+	free(lam_history);
 			
 	MIOClose(data_mio);
 	free(alphas);
 	free(betas);
 	free(lam);
+	free(max_a);
+	free(max_b);
 
 	return(0);
 }
