@@ -106,11 +106,6 @@ double *Partialmu_t(double *data, int fields, int f, int t,
 		exit(1);
 	}
 
-/*
-prev_part = partial_hist[0];
-printf("prev[%d]: %f, betas[%d]: %f\n",1,prev_part[1],0,betas[0]);
-*/
-	
 	/*
 	 * compute the sum of previous partials
 	 *
@@ -441,6 +436,7 @@ int main(int argc, char *argv[])
 	max_ll = -9999999999999.9;
 
 
+
 	for(m=0; m < MC; m++) {
 		err = ChooseTheta(alphas,ARLags,betas,LLags);
 		if(err < 0) {
@@ -468,7 +464,7 @@ int main(int argc, char *argv[])
 				memset(part_history[i],0,(ARLags+LLags+1)*sizeof(double));
 			}
 			memset(lam_history,0,LLags * sizeof(double));
-			for(t=0; i < start; i++) {
+			for(i=0; i < LLags; i++) {
 				lam_history[i] = mu;
 			}
 			for(t=start; t < recs; t++) {
@@ -549,6 +545,10 @@ int main(int argc, char *argv[])
 			}
 			ll = TotLogLike(data,data_fields,f,t,lam,
 					omega,alphas,ARLags,betas,LLags); 
+
+			if(ll == NAN) {
+				continue;
+			}
 
 			if(ll > max_ll) {
 				max_ll = ll;
