@@ -6,6 +6,7 @@
 
 #include "mio.h"
 #include "meanvar.h"
+#include "poisson.h"
 
 /*
  * for WTB interarrival times where cameras take sequences
@@ -17,16 +18,17 @@
  * including zeros, in each interval
  */
 
-char *Usage = "acp-mc -f filename\n\
+char *Usage = "acp -f filename\n\
 \t-I iterations (for gradient descent)\n\
 \t-R rate (learning rate)\n\
 \t-l ar lags\n\
 \t-L lambda lags\n\
 \t-P period (for seasonal case)\n\
 \t-M monte-carlo iterations\n\
+\t-Z <use crude zero inflation compensation>\n\
 \t-V <verbose mode>\n";
 
-#define ARGS "f:l:L:VP:I:R:M:"
+#define ARGS "f:l:L:VP:I:R:M:Z"
 
 
 char Fname[255];
@@ -38,6 +40,7 @@ int Period;
 double Rate;
 int Iterations;
 int MC;
+int Zero_compensate;
 
 double ACPLogLike(double *data, int fields, int f, int t, double *lam, double omega,
                               double *alphas, int arlags, 
@@ -266,6 +269,9 @@ int main(int argc, char *argv[])
 	double *max_b;
 	double max_o;
 	double max_ll;
+	int y_t;
+	double *history;
+	double phi;
 
 	memset(Fname,0,sizeof(Fname));
 	ARLags = 0;
@@ -303,6 +309,9 @@ int main(int argc, char *argv[])
 				break;
 			case 'M':
 				MC = atoi(optarg);
+				break;
+			case 'Z':
+				Zero_compensate = 1;
 				break;
 			default:
 				fprintf(stderr,
@@ -585,6 +594,73 @@ int main(int argc, char *argv[])
 			printf("\tb[%d]: %f\n",i,max_b[i]);
 		}
 	}
+
+	/*
+	 * generate an artificial series using max_o, max_a and max_b
+	 */
+
+	history = (double *)malloc(ARLags * sizeof(double));
+	if(history == NULL) {
+		exit(1);
+	}
+
+	if(Zero_compensate == 1) {
+		/*
+		 * compute probability that any value is a zero
+		 */
+		sum = 0;
+		for(i=start; i < recs; i++) {
+			if(data[i*data_fields+f] == 0) {
+				sum += 1;
+			}
+		}
+		phi = sum / (double)(recs - start);
+	}
+
+	for(t = 0; t < start; t++) {
+		history[t] = data[t*data_fields+f];
+	}
+
+	memset(lam_history,0,LLags*sizeof(double));
+
+	for(i=0; i < start; i++) {
+		lam_history[i] = mu;
+	}
+
+	for(t=start; t < recs; t++) {
+		/*
+		 * compute a mu_t
+		 */
+		sum = max_o;
+		for(i=0; i < ARLags; i++) {
+			sum += max_a[i] * history[i];
+		}
+		for(i=0; i < LLags; i++) {
+			sum += max_b[i] * lam_history[i];
+		}
+		if(Zero_compensate == 0) {
+			y_t = InvertedPoissonCDF(sum);
+		} else {
+			if(drand48() < (1.0 - phi)) {
+				y_t = InvertedPoissonCDF(sum);
+			} else {
+				y_t = 0;
+			}
+		}
+		printf("%10.0f %d\n",data[t*data_fields+0],y_t);
+
+		for(i = ARLags-2; i >= 0; i--) {
+			history[i+1] = history[i];
+		}
+		history[0] = (double)y_t;
+
+		for(i=LLags-2; i >= 0; i--) {
+			lam_history[i+1] = lam_history[i];
+		}
+		lam_history[i] = sum;
+	}
+			 
+	free(history);
 
 	for(i=0; i < LLags; i++) {
 		free(part_history[i]);
