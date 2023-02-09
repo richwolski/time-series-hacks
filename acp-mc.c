@@ -6,7 +6,6 @@
 
 #include "mio.h"
 #include "meanvar.h"
-#include "poisson.h"
 
 /*
  * for WTB interarrival times where cameras take sequences
@@ -18,17 +17,16 @@
  * including zeros, in each interval
  */
 
-char *Usage = "acp -f filename\n\
+char *Usage = "acp-mc -f filename\n\
 \t-I iterations (for gradient descent)\n\
 \t-R rate (learning rate)\n\
 \t-l ar lags\n\
 \t-L lambda lags\n\
 \t-P period (for seasonal case)\n\
 \t-M monte-carlo iterations\n\
-\t-Z <use crude zero inflation compensation>\n\
 \t-V <verbose mode>\n";
 
-#define ARGS "f:l:L:VP:I:R:M:Z"
+#define ARGS "f:l:L:VP:I:R:M:"
 
 
 char Fname[255];
@@ -40,7 +38,6 @@ int Period;
 double Rate;
 int Iterations;
 int MC;
-int Zero_compensate;
 
 double ACPLogLike(double *data, int fields, int f, int t, double *lam, double omega,
                               double *alphas, int arlags, 
@@ -109,6 +106,11 @@ double *Partialmu_t(double *data, int fields, int f, int t,
 		exit(1);
 	}
 
+/*
+prev_part = partial_hist[0];
+printf("prev[%d]: %f, betas[%d]: %f\n",1,prev_part[1],0,betas[0]);
+*/
+	
 	/*
 	 * compute the sum of previous partials
 	 *
@@ -202,7 +204,7 @@ double *ACPGrad(double *data, int fields, int f, int t, double *lam,
 	return(new);
 }
 
-int ChooseThetaOld(double *alphas, int acount, double *betas, int bcount)
+int ChooseTheta(double *alphas, int acount, double *betas, int bcount)
 {
 	int i;
 	double sum;
@@ -226,34 +228,7 @@ int ChooseThetaOld(double *alphas, int acount, double *betas, int bcount)
 	return(0);
 }
 
-int ChooseTheta(double *alphas, int acount, double *betas, int bcount)
-{
-	int i;
-	double sum;
-	int done = 0;
-	double rest;
-
-	while(!done) {
-		rest = 1.0;
-		sum = 0;
-		for(i=0; i < acount; i++) {
-			alphas[i] = drand48() * drand48() * rest;
-			sum += (alphas[i] * alphas[i]);
-			rest = rest - sum;
-			
-		}
-		for(i=0; i < bcount; i++) {
-			betas[i] = drand48() * drand48() * rest;
-			sum += (betas[i] * betas[i]);
-			rest = rest - sum;
-		}
-		if(sum < 1) {
-			done = 1;
-		}
-	}
-
-	return(0);
-}
+	
 	
 
 	
@@ -296,9 +271,6 @@ int main(int argc, char *argv[])
 	double *max_b;
 	double max_o;
 	double max_ll;
-	int y_t;
-	double *history;
-	double phi;
 
 	memset(Fname,0,sizeof(Fname));
 	ARLags = 0;
@@ -336,9 +308,6 @@ int main(int argc, char *argv[])
 				break;
 			case 'M':
 				MC = atoi(optarg);
-				break;
-			case 'Z':
-				Zero_compensate = 1;
 				break;
 			default:
 				fprintf(stderr,
@@ -472,7 +441,6 @@ int main(int argc, char *argv[])
 	max_ll = -9999999999999.9;
 
 
-
 	for(m=0; m < MC; m++) {
 		err = ChooseTheta(alphas,ARLags,betas,LLags);
 		if(err < 0) {
@@ -500,7 +468,7 @@ int main(int argc, char *argv[])
 				memset(part_history[i],0,(ARLags+LLags+1)*sizeof(double));
 			}
 			memset(lam_history,0,LLags * sizeof(double));
-			for(i=0; i < LLags; i++) {
+			for(t=0; i < start; i++) {
 				lam_history[i] = mu;
 			}
 			for(t=start; t < recs; t++) {
@@ -582,10 +550,6 @@ int main(int argc, char *argv[])
 			ll = TotLogLike(data,data_fields,f,t,lam,
 					omega,alphas,ARLags,betas,LLags); 
 
-			if(isnan(ll)) {
-				continue;
-			}
-
 			if(ll > max_ll) {
 				max_ll = ll;
 				max_o = omega;
@@ -620,75 +584,7 @@ int main(int argc, char *argv[])
 		for(i=0; i < LLags; i++) {
 			printf("\tb[%d]: %f\n",i,max_b[i]);
 		}
-		exit(1);
 	}
-
-	/*
-	 * generate an artificial series using max_o, max_a and max_b
-	 */
-
-	history = (double *)malloc(ARLags * sizeof(double));
-	if(history == NULL) {
-		exit(1);
-	}
-
-	if(Zero_compensate == 1) {
-		/*
-		 * compute probability that any value is a zero
-		 */
-		sum = 0;
-		for(i=start; i < recs; i++) {
-			if(data[i*data_fields+f] == 0) {
-				sum += 1;
-			}
-		}
-		phi = sum / (double)(recs - start);
-	}
-
-	for(t = 0; t < start; t++) {
-		history[t] = data[t*data_fields+f];
-	}
-
-	memset(lam_history,0,LLags*sizeof(double));
-
-	for(i=0; i < start; i++) {
-		lam_history[i] = mu;
-	}
-
-	for(t=start; t < recs; t++) {
-		/*
-		 * compute a mu_t
-		 */
-		sum = max_o;
-		for(i=0; i < ARLags; i++) {
-			sum += max_a[i] * history[i];
-		}
-		for(i=0; i < LLags; i++) {
-			sum += max_b[i] * lam_history[i];
-		}
-		if(Zero_compensate == 0) {
-			y_t = InvertedPoissonCDF(sum);
-		} else {
-			if(drand48() < (1.0 - phi)) {
-				y_t = InvertedPoissonCDF(sum);
-			} else {
-				y_t = 0;
-			}
-		}
-		printf("%10.0f %d\n",data[t*data_fields+0],y_t);
-
-		for(i = ARLags-2; i >= 0; i--) {
-			history[i+1] = history[i];
-		}
-		history[0] = (double)y_t;
-
-		for(i=LLags-2; i >= 0; i--) {
-			lam_history[i+1] = lam_history[i];
-		}
-		lam_history[i] = sum;
-	}
-			 
-	free(history);
 
 	for(i=0; i < LLags; i++) {
 		free(part_history[i]);
