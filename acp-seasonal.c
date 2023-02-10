@@ -97,6 +97,8 @@ double TotLogLike(double *data, int fields, int f, int recs, double *lam, double
  *
  * the partials also requite previous data values (for the alphas) and
  * previous u_t values (for the betas)
+ *
+ * format: [omega, alpha1, alpha2...alpha(p1), alpha(p2)...beta1, * beta1...betap1, betap2]
  */
 double *Partialmu_t(double *data, int fields, int f, int t, 
 			double omega, double *alphas, int acount, double *betas,
@@ -211,10 +213,12 @@ double *Partialmu_t(double *data, int fields, int f, int t,
 			sum = 0;
 			for(p = 0; p < bcount; p++) {
 				prev_part = partial_hist[p];
-				sum += (prev_part[i+1+acount+1] * betas[p]);
+				//sum += (prev_part[i+1+acount+1] * betas[p]);
+				sum += (prev_part[2*acount+1+i] * betas[p]);
 			}
 			sum += mu_history[i]; /* first element is mu_(t-1) */
-			part[i+1+acount+1] = sum;
+			//part[i+1+acount+1] = sum;
+			part[2*acount+1+i] = sum;
 		}
 		k = 0;
 		j = 0;
@@ -222,11 +226,13 @@ double *Partialmu_t(double *data, int fields, int f, int t,
 			sum = 0;
 			for(p = bcount; p < 2*bcount; p++) {
 				prev_part = partial_hist[period-k-1];
-				sum += (prev_part[i+1+acount+1] * betas[p]);
+				//sum += (prev_part[i+1+acount+1] * betas[p]);
+				sum += (prev_part[2*acount+1+i] * betas[p]);
 				k++;
 			}
 			sum += mu_history[period-j-1]; /* first element is mu_(t-1) */
-			part[i+1+acount+1] = sum;
+			//part[i+1+acount+1] = sum;
+			part[2*acount+1+i] = sum;
 			j++;
 		}
 	} else {
@@ -281,11 +287,37 @@ double *ACPGrad(double *data, int fields, int f, int t, double *lam,
 	}
 
 	if(period > 0) {
+/*
 		for(i=0; i < (acount+bcount+1); i++) {
 			new[i] = ((data[t*fields+f] - lam[t]) / lam[t]) * part[i];
 		}
 		for(i=acount+bcount+1; i < 2*(acount+bcount)+1; i++) {
 			new[i] = ((data[(t-period)*fields+f] - lam[t-period]) / lam[t-period]) * part[i];
+		}
+*/
+		/*
+		 * omega in [0] and the alphas for time t
+		 */
+		for(i=0; i < (acount+1); i++) {
+			new[i] = ((data[t*fields+f] - lam[t]) / lam[t]) * part[i];
+		}
+		/*
+		 * do the alphas for the period
+		 */
+		for(i=(acount+1); i < 2*acount+1; i++) {
+			new[i] = ((data[(t-period)*fields+f] - lam[t-period]) / lam[t-period]) * part[i];
+		}
+		/*
+		 * do the betas for t
+		 */
+		for(i=2*acount+1; i < (2*acount+1+bcount); i++) {
+			new[i] = ((data[t*fields+f] - lam[t]) / lam[t]) * part[i];
+		}
+		/*
+		 * to the betas for the period
+		 */
+		for(i=(2*acount+1+bcount); i < (2*(acount+bcount)+1); i++) {
+			new[i] = ((data[t*fields+f] - lam[t]) / lam[t]) * part[i];
 		}
 	} else {
 		for(i=0; i < (acount+bcount+1); i++) {
@@ -807,7 +839,7 @@ int main(int argc, char *argv[])
 			}
 
 			if(Verbose == 1) {
-				printf("iteration: %d, avg ll: %f\n",j,ll);
+				printf("[%d] iteration: %d, avg ll: %f\n",m,j,ll);
 				printf("\tomega: %f avggrad: %f\n",omega,totgrad[0] / totalgrad);
 				if(Period > 0) {
 					for(i=0; i < 2*ARLags; i++) {
