@@ -596,7 +596,7 @@ int main(int argc, char *argv[])
 	if(Period > 0) {
 		for(i=0; i < Period; i++) {
 			part_history[i] = (double *)malloc(2*(ARLags+LLags+1)*sizeof(double));
-			if(part_history == NULL) {
+			if(part_history[i] == NULL) {
 				exit(1);
 			}
 			memset(part_history[i],0,2*(ARLags+LLags+1)*sizeof(double));
@@ -887,7 +887,7 @@ int main(int argc, char *argv[])
 	 * generate an artificial series using max_o, max_a and max_b
 	 */
 
-	history = (double *)malloc(ARLags * sizeof(double));
+	history = (double *)malloc(Period * sizeof(double));
 	if(history == NULL) {
 		exit(1);
 	}
@@ -909,22 +909,29 @@ int main(int argc, char *argv[])
 		history[t] = data[t*data_fields+f];
 	}
 
-	memset(lam_history,0,LLags*sizeof(double));
+	memset(lam_history,0,Period*sizeof(double));
 
 	for(i=0; i < start; i++) {
 		lam_history[i] = mu;
 	}
 
 	for(t=start; t < recs; t++) {
-		/*
-		 * compute a mu_t
-		 */
 		sum = max_o;
 		for(i=0; i < ARLags; i++) {
 			sum += max_a[i] * history[i];
 		}
+		j = 0;
+		for(i=ARLags; i < 2*ARLags; i++) {
+			sum += max_a[i] * history[Period-j-1];
+			j++;
+		}
 		for(i=0; i < LLags; i++) {
 			sum += max_b[i] * lam_history[i];
+		}
+		j = 0;
+		for(i=LLags; i < 2*LLags; i++) {
+			sum += max_b[i] * lam_history[Period-j-1];
+			j++;
 		}
 		if(Zero_compensate == 0) {
 			y_t = InvertedPoissonCDF(sum);
@@ -937,15 +944,12 @@ int main(int argc, char *argv[])
 		}
 		printf("%10.0f %d\n",data[t*data_fields+0],y_t);
 
-		for(i = ARLags-2; i >= 0; i--) {
+		for(i = Period-2; i >= 0; i--) {
 			history[i+1] = history[i];
-		}
-		history[0] = (double)y_t;
-
-		for(i=LLags-2; i >= 0; i--) {
 			lam_history[i+1] = lam_history[i];
 		}
-		lam_history[i] = sum;
+		history[0] = (double)y_t;
+		lam_history[0] = sum;
 	}
 			 
 	free(history);
@@ -959,8 +963,9 @@ int main(int argc, char *argv[])
 			free(part_history[i]);
 		}
 	}
-	free(part_history);
 	free(lam_history);
+
+	free(part_history);
 			
 	MIOClose(data_mio);
 	free(alphas);
