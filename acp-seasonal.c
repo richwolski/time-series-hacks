@@ -170,6 +170,7 @@ double *Partialmu_t(double *data, int fields, int f, int t,
 			sum += data[(t-i)*fields+f];
 			part[i+1] = sum;
 		}
+		j = 0;
 		for(i=acount; i < 2*acount; i++) {
 			sum = 0;
 			/*
@@ -184,8 +185,10 @@ double *Partialmu_t(double *data, int fields, int f, int t,
 			/*
 			 * current partial
 			 */
-			sum += data[(t-period-i)*fields+f];
+//printf("p: %d %d %d %d\n",t,j,period,t-period-j-1);
+			sum += data[(t-period-j-1)*fields+f];
 			part[i+1] = sum;
+			j++;
 		}
 	} else {
 		for(i=0; i < acount; i++) {
@@ -200,7 +203,7 @@ double *Partialmu_t(double *data, int fields, int f, int t,
 			/*
 			 * current partial
 			 */
-			sum += data[(t-i)*fields+f];
+			sum += data[(t-i-1)*fields+f];
 			part[i+1] = sum;
 		}
 	}
@@ -698,6 +701,7 @@ int main(int argc, char *argv[])
 				lam[t] = mu;
 			}
 			for(t=start+ARLags+LLags; t < recs; t++) {
+//printf("t: %d %d\n",t,start);
 	//			if(data[t*data_fields+f] == 0) {
 	//				continue;
 	//			}
@@ -722,6 +726,16 @@ int main(int argc, char *argv[])
 				grad = ACPGrad(data,data_fields,f,t,lam,
 						omega, alphas,ARLags, betas, LLags,
 						lam_history,part_history,Period);
+				ll += ACPLogLike(data,data_fields,f,t,lam,
+						omega,alphas,ARLags,betas,LLags,Period); 
+/*
+				if(isnan(ll)) {
+					free(grad);
+					break;
+				}
+*/
+				totll++;
+				totalgrad++;
 				if(Period > 0) {
 					for(i=0; i < 2*(ARLags+LLags+1); i++) {
 						totgrad[i] += grad[i];
@@ -731,11 +745,6 @@ int main(int argc, char *argv[])
 						totgrad[i] += grad[i];
 					}
 				}
-				totalgrad++;
-				ll += ACPLogLike(data,data_fields,f,t,lam,
-						omega,alphas,ARLags,betas,LLags,Period); 
-//printf("ll[%d]: %f\n",t,ll);
-				totll++;
 				plam = Partialmu_t(data,data_fields,f,t,
 						   omega,alphas,ARLags,betas,LLags,
 						   lam_history,part_history,Period);
@@ -772,6 +781,9 @@ int main(int argc, char *argv[])
 			ll = TotLogLike(data,data_fields,f,t,lam,
 					omega,alphas,ARLags,betas,LLags,Period); 
 
+			if(totalgrad == 0) {
+				break;
+			}
 			omega = omega + (Rate * (totgrad[0] / totalgrad));
 
 			if(isnan(omega)) {
@@ -887,7 +899,11 @@ int main(int argc, char *argv[])
 	 * generate an artificial series using max_o, max_a and max_b
 	 */
 
-	history = (double *)malloc(Period * sizeof(double));
+	if(Period > 0) {
+		history = (double *)malloc(Period * sizeof(double));
+	} else {
+		history = (double *)malloc(LLags * sizeof(double));
+	}
 	if(history == NULL) {
 		exit(1);
 	}
@@ -920,18 +936,22 @@ int main(int argc, char *argv[])
 		for(i=0; i < ARLags; i++) {
 			sum += max_a[i] * history[i];
 		}
-		j = 0;
-		for(i=ARLags; i < 2*ARLags; i++) {
-			sum += max_a[i] * history[Period-j-1];
-			j++;
+		if(Period > 0) {
+			j = 0;
+			for(i=ARLags; i < 2*ARLags; i++) {
+				sum += max_a[i] * history[Period-j-1];
+				j++;
+			}
 		}
 		for(i=0; i < LLags; i++) {
 			sum += max_b[i] * lam_history[i];
 		}
-		j = 0;
-		for(i=LLags; i < 2*LLags; i++) {
-			sum += max_b[i] * lam_history[Period-j-1];
-			j++;
+		if(Period > 0) {
+			j = 0;
+			for(i=LLags; i < 2*LLags; i++) {
+				sum += max_b[i] * lam_history[Period-j-1];
+				j++;
+			}
 		}
 		if(Zero_compensate == 0) {
 			y_t = InvertedPoissonCDF(sum);
@@ -944,9 +964,16 @@ int main(int argc, char *argv[])
 		}
 		printf("%10.0f %d\n",data[t*data_fields+0],y_t);
 
-		for(i = Period-2; i >= 0; i--) {
-			history[i+1] = history[i];
-			lam_history[i+1] = lam_history[i];
+		if(Period > 0) {
+			for(i = Period-2; i >= 0; i--) {
+				history[i+1] = history[i];
+				lam_history[i+1] = lam_history[i];
+			}
+		} else {
+			for(i = LLags-2; i >= 0; i--) {
+				history[i+1] = history[i];
+				lam_history[i+1] = lam_history[i];
+			}
 		}
 		history[0] = (double)y_t;
 		lam_history[0] = sum;
