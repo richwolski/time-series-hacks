@@ -8,8 +8,10 @@ MIO=../mio
 APATH=../matrix
 MIOLIB=${MIO}/mio.o ${MIO}/mymalloc.o
 DIST=../distributions
-DISTLIB=${DIST}/poisson.o
-YWLIB=../meanvar/meanvar.o ../autoc/autoc.o ../autoc/yw-estimate.o -L/opt/homebrew/opt/lapack/lib -L /opt/homebrew/opt/openblas/lib ${APATH}/mioarray.o -llapacke -llapack -lopenblas
+DISTLIB=${DIST}/poisson.o -lm
+#OSX
+#YWLIB=../meanvar/meanvar.o ../autoc/autoc.o ../autoc/yw-estimate.o -L/opt/homebrew/opt/lapack/lib -L /opt/homebrew/opt/openblas/lib ${APATH}/mioarray.o -llapacke -llapack -lopenblas
+YWLIB=../meanvar/meanvar.o ../autoc/autoc.o ../autoc/yw-estimate.o ${APATH}/mioarray.o ${APATH}/lapack-3.8.0/liblapacke.a ${APATH}/lapack-3.8.0/liblapack.a -lgfortran -L/usr/lib64 -L/usr/lib64/atlas -lsatlas -lblas -lm
 
 diffseries: diffseries.c simple_input.o simple_input.h
 	${CC} ${CFLAGS} -DTEST -o diffseries diffseries.c simple_input.o 
