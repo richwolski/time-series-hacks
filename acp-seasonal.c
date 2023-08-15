@@ -26,9 +26,10 @@ char *Usage = "acp -f filename\n\
 \t-P period (for seasonal case)\n\
 \t-M monte-carlo iterations\n\
 \t-Z <use crude zero inflation compensation>\n\
+\t-F <generate 1-step ahead forcast>\n\
 \t-V <verbose mode>\n";
 
-#define ARGS "f:l:L:VP:I:R:M:Z"
+#define ARGS "f:l:L:VP:I:R:M:ZF"
 
 
 char Fname[255];
@@ -36,11 +37,12 @@ int Verbose;
 int Sample_count;
 int ARLags;
 int LLags;
-int Period;
+unsigned long Period;
 double Rate;
 int Iterations;
 int MC;
 int Zero_compensate;
+int Forecast;
 
 double ACPLogLike(double *data, int fields, int f, int t, double *lam, double omega,
                               double *alphas, int arlags, 
@@ -421,6 +423,7 @@ int main(int argc, char *argv[])
 	double *history;
 	double phi;
 	int nan_done;
+	double forc;
 
 	memset(Fname,0,sizeof(Fname));
 	ARLags = 0;
@@ -434,6 +437,9 @@ int main(int argc, char *argv[])
 		{
 			case 'f':
 				strncpy(Fname,optarg,sizeof(Fname));
+				break;
+			case 'F':
+				Forecast = 1;
 				break;
 			case 'V':
 				Verbose = 1;
@@ -884,12 +890,42 @@ int main(int argc, char *argv[])
 			for(i=0; i < 2*LLags; i++) {
 				printf("\tb[%d]: %f\n",i,max_b[i]);
 			}
+			if(Forecast == 1) {
+				forc = omega;
+				for(i=0; i < ARLags; i++) {
+					forc += (alphas[i] * 
+						data[(recs-i-1)*data_fields+f]);
+				}
+				for(i=0; i < ARLags; i++) {
+					forc += (alphas[i+ARLags] * 
+					data[((recs-Period)-i-1)*data_fields+f]);
+				}
+
+				for(i=0; i < LLags; i++) {
+                                        forc += (betas[i] * lam_history[i]);
+                                }
+				for(i=0; i < LLags; i++) {
+                                        forc += (betas[i+LLags] * lam_history[(Period-1)-i]);
+                                }
+				printf("\tforecast: %f\n",(double)InvertedPoissonCDF(forc));
+			}
 		} else {
 			for(i=0; i < ARLags; i++) {
 				printf("\ta[%d]: %f\n",i,max_a[i]);
 			}
 			for(i=0; i < LLags; i++) {
 				printf("\tb[%d]: %f\n",i,max_b[i]);
+			}
+			if(Forecast == 1) {
+				forc = omega;
+				for(i=0; i < ARLags; i++) {
+					forc += (alphas[i] * 
+						data[(recs-i-1)*data_fields+f]);
+				}
+				for(i=0; i < LLags; i++) {
+                                        forc += (betas[i] * lam_history[i]);
+                                }
+				printf("\tforecast: %f\n",forc);
 			}
 		}
 		exit(1);
